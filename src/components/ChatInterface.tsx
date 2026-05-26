@@ -658,13 +658,13 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
                                 🔑 Kinyarwanda:
                               </p>
                               <p className="ml-1 text-wa-text-muted">
-                                API Key ikoreshwa na ProdixAI yarangiye cyangwa ntabwo ari yo. Kugira ngo ukomeze gukoresha porogaramu neza, jya muri <strong>Settings (akamenyetso k'uruziga runetse hejuru ku mfuruka y'iburyo ya AI Studio) &gt; Secrets Panel</strong>, maze uvugurure agaciro ka <code>VITE_GEMINI_API_KEY</code> uheze ukande Save!
+                                API Key ikoreshwa na ProdixAI yarangiye cyangwa ntabwo ari yo. Kugira ngo ukomeze gukoresha porogaramu neza, jya muri <strong>Settings (akamenyetso k'uruziga runetse hejuru ku mfuruka y'iburyo ya AI Studio) &gt; Secrets Panel</strong>, maze uvugurure agaciro ka <code>GEMINI_API_KEY</code> uheze ukande Save!
                               </p>
                               <p className="font-semibold text-blue-600 dark:text-blue-400 mt-1">
                                 🌐 English:
                               </p>
                               <p className="ml-1 text-wa-text-muted">
-                                The active Gemini API Key has expired or is invalid. To resume chatting with ProdixAI in development/production, please renew or configure your own valid API Key under <strong>Settings (the gear icon on the top right in AI Studio) &gt; Secrets</strong> (add/edit the variable name <code>VITE_GEMINI_API_KEY</code>) to bypass the block.
+                                The active Gemini API Key has expired or is invalid. To resume chatting with ProdixAI in development/production, please renew or configure your own valid API Key under <strong>Settings (the gear icon on the top right in AI Studio) &gt; Secrets</strong> (add/edit the variable name <code>GEMINI_API_KEY</code>) to bypass the block.
                               </p>
                             </>
                           ) : (

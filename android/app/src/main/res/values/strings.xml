@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Prodix AI</string>
+    <string name="title_activity_main">Prodix AI</string>
+    <string name="package_name">com.prodixai.app</string>
+    <string name="custom_url_scheme">com.prodixai.app</string>
+</resources>

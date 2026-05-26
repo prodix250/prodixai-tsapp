@@ -20,11 +20,11 @@ const maskKey = (key: string): string => {
   return `${key.substring(0, 8)}...${key.slice(-4)}`;
 };
 
-// Reliable dynamic retrieval of VITE_GEMINI_API_KEY from environment variables and fallback key (deduplicated)
+// Reliable dynamic retrieval of GEMINI_API_KEY from environment variables and fallback key (deduplicated)
 const getApiKeys = (): string[] => {
   return Array.from(
     new Set([
-      import.meta.env.VITE_GEMINI_API_KEY,
+      process.env.GEMINI_API_KEY,
       "AIzaSyA6rCDY1J3IHPjNR6AGpKso8GxTjDVfUIQ"
     ].filter(Boolean) as string[])
   );
@@ -64,7 +64,7 @@ app.post("/api/chat", async (req, res) => {
 
     const modelsToTry = [
       { name: "gemini-3.5-flash", label: "ProdixAI (Speed-Flash)" },
-        import.meta.env.VITE_GEMINI_API_KEY,
+      { name: "gemini-3.1-flash-lite", label: "ProdixAI (Ultra-Lite)" }
     ];
 
     let lastError: any = null;
@@ -175,7 +175,7 @@ When a user asks you to write, draft, or make a document, formal letter, or repo
             break; // Success! Exit model loop
           }
         } catch (error: any) {
-          console.error(`Gemini Error with ${modelInfo.name} using key [${maskKey(currentApiKey)}] on server:`, error);
+          console.warn(`[Key Fallback Alert] Tried ${modelInfo.name} with key [${maskKey(currentApiKey)}] but got error: ${error.message || error}`);
           lastError = error;
         }
       }
@@ -190,7 +190,7 @@ When a user asks you to write, draft, or make a document, formal letter, or repo
     } else {
       let errorMessage = "PRODIX AI is busy, please try again in a moment.";
       if (currentApiKeys.length === 0) {
-        errorMessage = "PRODIX API Key is not configured. Please add VITE_GEMINI_API_KEY in the Settings -> Secrets panel or configure it in your .env file.";
+        errorMessage = "PRODIX API Key is not configured. Please add GEMINI_API_KEY in the Settings -> Secrets panel or configure it in your .env file.";
       } else if (lastError) {
         let errStr = "";
         try {
@@ -200,9 +200,9 @@ When a user asks you to write, draft, or make a document, formal letter, or repo
         }
         const attemptedKeysList = currentApiKeys.map(maskKey).join(", ");
         if (errStr.includes("api key") || errStr.includes("api_key") || errStr.includes("expired") || errStr.includes("invalid") || errStr.includes("unauthorized") || errStr.includes("not valid")) {
-          errorMessage = `PRODIX API Key is expired, invalid, or needs renewal. Please renew your VITE_GEMINI_API_KEY in the Settings -> Secrets panel in Google AI Studio. (Attempted keys: ${attemptedKeysList})`;
+          errorMessage = `PRODIX API Key is expired, invalid, or needs renewal. Please renew your GEMINI_API_KEY in the Settings -> Secrets panel in Google AI Studio. (Attempted keys: ${attemptedKeysList})`;
         } else if (errStr.includes("quota") || errStr.includes("limit") || errStr.includes("resource_exhausted") || errStr.includes("429")) {
-          errorMessage = "Muri kano kanya umubare w'ibibazo byemewe ku munsi (Quota Limit) ku mfashanyigisho rusange wuzuye (429 Rate Limit).\nKugira ngo ukomeze gukoresha ProdixAI udakumiriwe, shyiramo API Key yawe bwite muri **Settings > Secrets** (injiza izina `VITE_GEMINI_API_KEY`) cyangwa utegereze gato!\n\n---\n\nThe shared daily API quota limit has been exceeded (429 Rate Limit).\nTo bypass this limit and continue instantly, please configure your own personal API Key under **Settings > Secrets** (add variable name `VITE_GEMINI_API_KEY`) in AI Studio.";
+          errorMessage = "Muri kano kanya umubare w'ibibazo byemewe ku munsi (Quota Limit) ku mfashanyigisho rusange wuzuye (429 Rate Limit).\nKugira ngo ukomeze gukoresha ProdixAI udakumiriwe, shyiramo API Key yawe bwite muri **Settings > Secrets** (injiza izina `GEMINI_API_KEY`) cyangwa utegereze gato!\n\n---\n\nThe shared daily API quota limit has been exceeded (429 Rate Limit).\nTo bypass this limit and continue instantly, please configure your own personal API Key under **Settings > Secrets** (add variable name `GEMINI_API_KEY`) in AI Studio.";
         } else {
           errorMessage = `Gemini API Error: ${lastError.message || lastError} (Attempted keys: ${attemptedKeysList})`;
         }
