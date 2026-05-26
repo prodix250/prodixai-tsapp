@@ -1,0 +1,6 @@
+{
+  "name": "ProdixAI",
+  "description": "A pixel-perfect WhatsApp clone with AI backend for Kinyarwanda and English.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
