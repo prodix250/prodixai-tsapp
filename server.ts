@@ -20,14 +20,11 @@ const maskKey = (key: string): string => {
   return `${key.substring(0, 8)}...${key.slice(-4)}`;
 };
 
-// Reliable dynamic retrieval of GEMINI_API_KEY from environment variables and fallback key (deduplicated)
+// Retrieve GEMINI_API_KEY from environment variables only.
+// Do NOT hardcode any API keys in source code.
 const getApiKeys = (): string[] => {
-  return Array.from(
-    new Set([
-      process.env.GEMINI_API_KEY,
-      "AIzaSyA6rCDY1J3IHPjNR6AGpKso8GxTjDVfUIQ"
-    ].filter(Boolean) as string[])
-  );
+  const key = process.env.GEMINI_API_KEY;
+  return key ? [key] : [];
 };
 
 app.post("/api/chat", async (req, res) => {
