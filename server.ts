@@ -9,6 +9,19 @@ dotenv.config();
 const app = express();
 const PORT = 3000;
 
+// CORS middleware to allow Android APK WebViews (running on http://localhost, file://, etc.) to query Render
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
+  
+  if (req.method === "OPTIONS") {
+    res.sendStatus(200);
+    return;
+  }
+  next();
+});
+
 // Increase payload limits for base64 file attachments
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
@@ -20,8 +33,7 @@ const maskKey = (key: string): string => {
   return `${key.substring(0, 8)}...${key.slice(-4)}`;
 };
 
-// Retrieve GEMINI_API_KEY from environment variables only.
-// Do NOT hardcode any API keys in source code.
+// Reliable dynamic retrieval of GEMINI_API_KEY from environment variables only
 const getApiKeys = (): string[] => {
   const key = process.env.GEMINI_API_KEY;
   return key ? [key] : [];
