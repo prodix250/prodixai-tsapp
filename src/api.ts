@@ -8,7 +8,21 @@ export async function sendMessageToAI(
   documentName?: string
 ): Promise<{text: string, modelLabel?: string}> {
   try {
-    const response = await fetch("/api/chat", {
+    // Detemine correct API URL depending on the runtime environment (APK, Web view, Render, Dev)
+    let apiUrl = "/api/chat";
+    if (typeof window !== "undefined" && window.location) {
+      const { hostname, protocol, port } = window.location;
+      
+      const isWebDeployment = hostname.includes("onrender.com") || hostname.includes("run.app");
+      const isLocalWebDev = (hostname === "localhost" || hostname === "127.0.0.1") && port;
+      
+      if (!isWebDeployment && !isLocalWebDev) {
+        // Fallback for Android APK webviews (Capacitor/Cordova/WebView) to query Render directly
+        apiUrl = "https://prodixai-tsapp.onrender.com/api/chat";
+      }
+    }
+
+    const response = await fetch(apiUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json"

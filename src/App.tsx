@@ -7,10 +7,18 @@ import React, { useState, useEffect } from "react";
 import { ChatList } from "./components/ChatList";
 import { ChatInterface } from "./components/ChatInterface";
 import { ChatSession } from "./types";
+import { SplashScreen } from "@capacitor/splash-screen";
 
 export default function App() {
   const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(false);
+
+  useEffect(() => {
+    // Hide the splash screen once the app is ready
+    SplashScreen.hide().catch((err) => {
+      console.warn("SplashScreen.hide() failed:", err);
+    });
+  }, []);
 
   const [sessions, setSessions] = useState<ChatSession[]>(() => {
     const saved = localStorage.getItem("prodixai-sessions");
