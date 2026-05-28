@@ -16,6 +16,7 @@ import {
   BorderStyle
 } from "docx";
 import { saveAs } from "file-saver";
+import { downloadFile } from "./capacitorDownload";
 
 // Helper to parse formatting (bold/italic) from markdown line
 function parseFormattedText(
@@ -728,45 +729,6 @@ export async function generateProfessionalDoc(
   
   const fileNameWithExt = `${formattedFileName}.docx`;
 
-  // 1. Try Native Mobile sharing first if supported (extremely reliable on phone's Safari, Chrome, in-apps)
-  if (navigator.share) {
-    try {
-      const fileOfBlob = new File([finalBlob], fileNameWithExt, {
-        type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-      });
-      // Verify compatibility of sharing files
-      if (navigator.canShare && navigator.canShare({ files: [fileOfBlob] })) {
-        await navigator.share({
-          files: [fileOfBlob],
-          title: fileNameWithExt,
-          text: `ProdixAI: ${fileNameWithExt}`
-        });
-        console.log("Document shared successfully via native share panel!");
-        return;
-      }
-    } catch (shareErr) {
-      console.warn("Native Web Share API failed or closed, fall back to Base64 file link download.", shareErr);
-    }
-  }
-
-  // 2. Try high-compatibility Base64 DataURL download block
-  try {
-    const base64Url = await blobToBase64(finalBlob);
-    const a = document.createElement("a");
-    a.href = base64Url;
-    a.download = fileNameWithExt;
-    a.style.display = "none";
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => {
-      document.body.removeChild(a);
-    }, 500);
-  } catch (err) {
-    console.warn("Base64 download failed, fallback to native file-saver download.", err);
-    try {
-      saveAs(finalBlob, fileNameWithExt);
-    } catch (directErr) {
-      console.error("All document download pathways failed on this device.", directErr);
-    }
-  }
+  // Save/Share using our unified helper (handles Android Capacitor files/shares & Web downloads smoothly)
+  await downloadFile(finalBlob, fileNameWithExt);
 }

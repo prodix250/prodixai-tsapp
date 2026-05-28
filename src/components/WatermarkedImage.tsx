@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { Download, Loader2, RotateCcw, AlertCircle } from "lucide-react";
+import { downloadFile } from "../lib/capacitorDownload";
 
 function getPromptFromUrl(url: string): string {
   if (!url) return "";
@@ -87,7 +88,7 @@ export function WatermarkedImage({ url }: { url: string }) {
       img.referrerPolicy = "no-referrer";
       img.src = cleanUrl;
 
-      img.onload = () => {
+      img.onload = async () => {
         try {
           const canvas = document.createElement("canvas");
           const ctx = canvas.getContext("2d");
@@ -130,14 +131,9 @@ export function WatermarkedImage({ url }: { url: string }) {
             ctx.fillStyle = "#f97316";
             ctx.fillText(textAI, xStart + prodixWidth, yPos);
 
-            // Export to PNG & download
+            // Export to PNG & download via platform-safe downloader
             const dataUrl = canvas.toDataURL("image/png");
-            const a = document.createElement("a");
-            a.href = dataUrl;
-            a.download = `ProdixAI-${Date.now()}.png`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
+            await downloadFile(dataUrl, `ProdixAI-${Date.now()}.png`);
           } else {
             throw new Error("Canvas context is null");
           }
@@ -162,17 +158,7 @@ export function WatermarkedImage({ url }: { url: string }) {
   };
 
   const triggerFallbackDownload = () => {
-    try {
-      const a = document.createElement("a");
-      a.href = cleanUrl;
-      a.target = "_blank";
-      a.download = `ProdixAI-${Date.now()}.jpg`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    } catch (e) {
-      console.error("All download avenues depleted:", e);
-    }
+    downloadFile(cleanUrl, `ProdixAI-${Date.now()}.jpg`);
   };
 
   if (status === "error") {

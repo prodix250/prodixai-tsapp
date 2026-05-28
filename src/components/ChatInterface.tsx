@@ -35,6 +35,37 @@ function cleanAndShortenDocTitle(rawTitle: string): string {
   return short.join(" ");
 }
 
+function ChatImage({ src, alt, name }: { src?: string; alt: string; name: string }) {
+  const [error, setError] = useState(false);
+  
+  if (error || !src) {
+    return (
+      <div className="flex items-center gap-2.5 p-3 bg-black/15 dark:bg-black/30 rounded-[8px] border border-white/5 text-left max-w-xs min-w-[240px] select-none">
+        <div className="w-10 h-10 rounded-lg bg-teal-600 text-white flex items-center justify-center shadow-md shrink-0">
+          <CameraIcon className="w-5 h-5 shrink-0" />
+        </div>
+        <div className="flex flex-col overflow-hidden text-left">
+          <span className="text-[13px] font-semibold text-wa-text truncate max-w-[150px] leading-tight font-sans" title={name}>
+            {name}
+          </span>
+          <span className="text-[10px] text-wa-text-muted mt-0.5 font-mono">
+            Ifoto yoherejwe (Photo)
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <img 
+      src={src} 
+      alt={alt} 
+      onError={() => setError(true)}
+      className="max-w-full h-auto max-h-60 object-cover rounded shadow-sm hover:opacity-90 cursor-pointer transition-opacity" 
+    />
+  );
+}
+
 interface ChatInterfaceProps {
   session: ChatSession;
   onBack: () => void;
@@ -330,7 +361,19 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
 
   useEffect(() => {
     if (!session.isTemporary) {
-      localStorage.setItem(`prodixai-messages-${session.id}`, JSON.stringify(messages));
+      // Strip out huge base64 payloads to prevent QuotaExceededError crashes with localStorage
+      const cleanedMessages = messages.map(msg => {
+        if (msg.attachment && msg.attachment.base64) {
+          const { base64, ...rest } = msg.attachment;
+          return { ...msg, attachment: rest };
+        }
+        return msg;
+      });
+      try {
+        localStorage.setItem(`prodixai-messages-${session.id}`, JSON.stringify(cleanedMessages));
+      } catch (err) {
+        console.error("Failed to save messages to localStorage (quota exceeded):", err);
+      }
     }
   }, [messages, session.id, session.isTemporary]);
 
@@ -395,11 +438,20 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
     setInputText("");
     setAttachedFile(null);
 
-    const isImageEditRequest = !!(newAttachment && newAttachment.type.startsWith("image/") && 
-      (/hindura|ifoto|change|edit|modify|transform|put\s+a|add\s+a|replace|background|remove|filter|hat|wear|glasses|shirt|hair|style/i.test(currentText) || currentText.trim() === ""));
+    // Distinguish if the request is for visual image editing/transformation OR vision/answering questions
+    const hasVisualEditIntent = /hindura|change|edit|modify|transform|put|add|replace|background|remove|filter|hat|wear|glasses|shirt|hair|style/i.test(currentText);
+    const hasAnalysisIntent = /iki|ibi|soma|somera|kosora|mbarira|correct|solve|explain|what|read|analyze|show|understand/i.test(currentText);
+
+    const isImageEditRequest = !!(
+      newAttachment && 
+      newAttachment.type.startsWith("image/") && 
+      (currentText.trim() === "" || (hasVisualEditIntent && !hasAnalysisIntent))
+    );
 
     if (isImageEditRequest) {
       setCustomLoadingText("Ndirimo guhindura ifoto yawe, akanya gato...");
+    } else if (newAttachment) {
+      setCustomLoadingText("Ndirimo gusesengura no gusoma idosiye/ifoto yawe, akanya gato...");
     } else {
       setCustomLoadingText(null);
     }
@@ -585,7 +637,7 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
                 {msg.attachment && (
                   <div className="mb-1 rounded overflow-hidden max-w-xs min-w-[240px]">
                     {msg.attachment.type.startsWith("image/") ? (
-                       <img src={msg.attachment.url} alt="attachment" className="max-w-full h-auto max-h-60 object-cover rounded shadow-sm hover:opacity-90 cursor-pointer transition-opacity" />
+                       <ChatImage src={msg.attachment.url} alt="attachment" name={msg.attachment.name} />
                     ) : (
                        <div className="flex items-center justify-between gap-3 p-2.5 bg-black/10 dark:bg-black/20 hover:bg-black/15 rounded-[8px] transition-colors cursor-pointer border border-white/5">
                          <div className="flex items-center gap-2.5 overflow-hidden">
@@ -735,21 +787,30 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
         {isLoading && (
            <div className="flex justify-start">
               <div className="bg-wa-bubble-in rounded-lg rounded-tl-none px-4 py-3 text-wa-text text-[15px] shadow-sm flex items-center gap-2">
-                 {customLoadingText ? (
-                   <div className="flex items-center gap-2">
-                     <span className="relative flex h-2.5 w-2.5">
-                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#00a884] opacity-75"></span>
-                       <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[#00a884]"></span>
-                     </span>
-                     <span className="text-[13px] font-medium text-wa-text-muted animate-pulse">{customLoadingText}</span>
+                 <div className="flex items-center gap-3">
+                   <div className="relative w-5 h-5 flex items-center justify-center shrink-0">
+                     {/* Outer rotating orbit container */}
+                     <div className="absolute inset-0 animate-spin" style={{ animationDuration: '1.6s' }}>
+                       {/* Orbit Dot 1 - Cyan */}
+                       <span className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-1.5 h-1.5 bg-cyan-400 rounded-full shadow-[0_0_6px_#22d3ee]"></span>
+                       {/* Orbit Dot 2 - Fuchsia */}
+                       <span className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 w-1.5 h-1.5 bg-fuchsia-400 rounded-full shadow-[0_0_6px_#e879f9]"></span>
+                       {/* Orbit Dot 3 - Blue */}
+                       <span className="absolute left-0 top-1/2 -translate-x-1/2 -translate-y-1/2 w-1.5 h-1.5 bg-blue-400 rounded-full shadow-[0_0_6px_#60a5fa]"></span>
+                       {/* Orbit Dot 4 - Emerald */}
+                       <span className="absolute right-0 top-1/2 translate-x-1/2 -translate-y-1/2 w-1.5 h-1.5 bg-emerald-400 rounded-full shadow-[0_0_6px_#34d399]"></span>
+                       
+                       {/* Light circular stroke trail */}
+                       <div className="absolute inset-0.5 rounded-full border border-white/10"></div>
+                     </div>
+                     {/* Center core pulse */}
+                     <div className="w-1.5 h-1.5 rounded-full bg-indigo-400/60 animate-pulse"></div>
                    </div>
-                 ) : (
-                   <div className="flex gap-1">
-                     <span className="animate-bounce inline-block w-1.5 h-1.5 bg-wa-text-muted rounded-full"></span>
-                     <span className="animate-bounce delay-100 inline-block w-1.5 h-1.5 bg-wa-text-muted rounded-full"></span>
-                     <span className="animate-bounce delay-200 inline-block w-1.5 h-1.5 bg-wa-text-muted rounded-full"></span>
-                   </div>
-                 )}
+                   
+                   <span className="text-[13.5px] font-medium text-wa-text-muted animate-pulse">
+                     {customLoadingText || "ProdixAI iri gutekereza..."}
+                   </span>
+                 </div>
               </div>
            </div>
         )}

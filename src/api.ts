@@ -22,13 +22,26 @@ export async function sendMessageToAI(
       }
     }
 
+    // Clean history to remove huge base64 payloads of previous files/photos.
+    // The AI only needs the textual messages of the history, not the massive duplicate base64 data!
+    const cleanedHistory = (history || []).map((msg: any) => {
+      if (msg.attachment && msg.attachment.base64) {
+        const { base64, ...rest } = msg.attachment;
+        return {
+          ...msg,
+          attachment: rest
+        };
+      }
+      return msg;
+    });
+
     const response = await fetch(apiUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        history,
+        history: cleanedHistory,
         message,
         file,
         documentContext,
