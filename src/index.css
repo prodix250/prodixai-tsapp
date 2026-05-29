@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@variant dark (&:where(.dark, .dark *));
+
 @theme {
   --color-wa-bg: var(--wa-bg);
   --color-wa-panel: var(--wa-panel);
@@ -21,7 +23,7 @@
 :root {
   --wa-bg: #ffffff;
   --wa-panel: #ffffff;
-  --wa-header: #075e54;
+  --wa-header: #128C7E;
   --wa-bubble-in: #ffffff;
   --wa-bubble-out: #dcf8c6;
   --wa-bubble-out-dark: #dcf8c6;
@@ -36,7 +38,7 @@
   --input-pill-text: #000000;
 }
 
-.dark {
+.dark, :root.dark, html.dark {
   --wa-bg: #0b141a;
   --wa-panel: #111b21;
   --wa-header: #202c33;
@@ -55,8 +57,8 @@
 }
 
 body {
-  background-color: var(--color-wa-bg);
-  color: var(--color-wa-text);
+  background-color: var(--wa-bg);
+  color: var(--wa-text);
   overflow: hidden;
 }
 
@@ -92,5 +94,6 @@ body {
 }
 
 .header-anim {
-  background: #128C7E;
+  background-color: var(--wa-header);
+  transition: background-color 200ms ease;
 }

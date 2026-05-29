@@ -8,8 +8,6 @@ import { AttachmentMenu } from "./AttachmentMenu";
 import { sendMessageToAI } from "../api";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { motion, AnimatePresence } from "motion/react";
-// @ts-ignore
-import jesusBg from "../assets/images/jesus_bg_1780090976786.png";
 
 // Helper to sanitize & extract extremely concise and humanized document names to prevent word-wrapping/overflows and download issues on mobile
 function cleanAndShortenDocTitle(rawTitle: string): string {
@@ -624,16 +622,6 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
 
       {/* Chat Area */}
       <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-2 bg-transparent relative">
-        {/* Background image watermark of Jesus */}
-        <div className="absolute inset-0 pointer-events-none overflow-hidden select-none z-0">
-          <img 
-            src={jesusBg} 
-            alt="Jesus Background" 
-            className="w-full h-full object-cover opacity-[0.14] dark:opacity-[0.08] filter saturate-[0.8]" 
-            referrerPolicy="no-referrer"
-          />
-        </div>
-        
         <div className="flex justify-center mb-4 z-10">
           <div className="bg-wa-panel text-wa-text-muted text-xs px-3 py-1.5 rounded-lg shadow-sm">
             Ukora gake bikajyenda cyane by <span className="text-[#00a884] font-bold">Kevin</span>
