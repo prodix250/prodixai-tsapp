@@ -9,7 +9,6 @@ import { ChatInterface } from "./components/ChatInterface";
 import { ChatSession } from "./types";
 
 export default function App() {
-  const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
     const saved = localStorage.getItem("prodixai-theme");
     return saved === "dark";
@@ -33,6 +32,35 @@ export default function App() {
     }
     return [];
   });
+
+  const [activeSession, setActiveSession] = useState<ChatSession | null>(() => {
+    const savedActiveId = localStorage.getItem("prodixai-active-session-id");
+    if (savedActiveId && savedActiveId !== "") {
+      const savedSessions = localStorage.getItem("prodixai-sessions");
+      if (savedSessions) {
+        try {
+          const parsed = JSON.parse(savedSessions);
+          const found = parsed.find((s: any) => s.id === savedActiveId);
+          if (found) {
+            const date = found.lastMessageTime ? new Date(found.lastMessageTime) : undefined;
+            return {
+              ...found,
+              lastMessageTime: date && !isNaN(date.getTime()) ? date : undefined
+            };
+          }
+        } catch (e) {}
+      }
+    }
+    return null;
+  });
+
+  useEffect(() => {
+    if (activeSession) {
+      localStorage.setItem("prodixai-active-session-id", activeSession.id);
+    } else {
+      localStorage.removeItem("prodixai-active-session-id");
+    }
+  }, [activeSession]);
 
   useEffect(() => {
     const sessionsToSave = sessions.filter(s => !s.isTemporary);

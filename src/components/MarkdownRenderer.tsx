@@ -86,6 +86,25 @@ export const MarkdownRenderer = React.memo(function MarkdownRenderer({ content }
   );
 });
 
+const customCodeTheme: { [key: string]: React.CSSProperties } = {
+  ...vscDarkPlus,
+  'comment': { color: '#9d9d9d', fontWeight: 'bold', fontStyle: 'italic' },
+  'punctuation': { color: '#9d9d9d', fontWeight: 'bold' },
+  'operator': { color: '#9d9d9d', fontWeight: 'bold' },
+  'keyword': { color: '#569cd6', fontWeight: 'bold' },
+  'function': { color: '#569cd6', fontWeight: 'bold' },
+  'class-name': { color: '#569cd6', fontWeight: 'bold' },
+  'string': { color: '#ce9178', fontWeight: 'bold' },
+  'number': { color: '#ce9178', fontWeight: 'bold' },
+  'boolean': { color: '#ce9178', fontWeight: 'bold' },
+  'property': { color: '#ce9178', fontWeight: 'bold' },
+  'attr-name': { color: '#ce9178', fontWeight: 'bold' },
+  'selector': { color: '#ce9178', fontWeight: 'bold' },
+  'constant': { color: '#ce9178', fontWeight: 'bold' },
+  'symbol': { color: '#ce9178', fontWeight: 'bold' },
+  'variable': { color: '#ce9178', fontWeight: 'bold' },
+};
+
 function CodeBlock({ language, value }: { language: string; value: string }) {
   const [copied, setCopied] = useState(false);
 
@@ -110,7 +129,7 @@ function CodeBlock({ language, value }: { language: string; value: string }) {
       <div className="p-0 text-sm overflow-x-auto custom-scrollbar">
         <SyntaxHighlighter
           language={language}
-          style={vscDarkPlus}
+          style={customCodeTheme}
           customStyle={{
             margin: 0,
             padding: "1rem",

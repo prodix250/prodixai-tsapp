@@ -48,14 +48,57 @@ function sanitizePrompt(prompt: string): string {
     .replace(/\s+/g, " ");
 }
 
-export function WatermarkedImage({ url }: { url: string }) {
-  const [status, setStatus] = useState<"loading" | "success" | "error">("loading");
-  const [isDownloading, setIsDownloading] = useState(false);
-  const [retryCount, setRetryCount] = useState(0);
-  const imgRef = useRef<HTMLImageElement>(null);
+// Local storage cache for successfully loaded image URLs to prevent infinite reloading or flashing
+function getSavedLoadedStatus(url: string): boolean {
+  try {
+    return localStorage.getItem(`prodixai-img-loaded-${encodeURIComponent(url)}`) === "true";
+  } catch (e) {
+    return false;
+  }
+}
 
-  // Generate a stable random base seed once per component instance
-  const randomSeed = useMemo(() => Math.floor(Math.random() * 1000000), []);
+function setSavedLoadedStatus(url: string, isLoaded: boolean) {
+  try {
+    if (isLoaded) {
+      localStorage.setItem(`prodixai-img-loaded-${encodeURIComponent(url)}`, "true");
+    } else {
+      localStorage.removeItem(`prodixai-img-loaded-${encodeURIComponent(url)}`);
+    }
+  } catch (e) {}
+}
+
+export function WatermarkedImage({ url }: { url: string }) {
+  const [retryCount, setRetryCount] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem(`prodixai-img-retry-${encodeURIComponent(url)}`);
+      return saved ? parseInt(saved, 10) : 0;
+    } catch (e) {
+      return 0;
+    }
+  });
+
+  // Calculate stable deterministic seed
+  const stableSeed = useMemo(() => {
+    const rawPrompt = getPromptFromUrl(url);
+    const cleanPrompt = sanitizePrompt(rawPrompt);
+    
+    // Check if the source URL already contains a seed parameter
+    try {
+      const match = url.match(/[?&]seed=(\d+)/);
+      if (match && match[1]) {
+        return parseInt(match[1], 10);
+      }
+    } catch (e) {}
+
+    // Fallback: Generate a deterministic hash from the prompt
+    let hash = 0;
+    for (let i = 0; i < cleanPrompt.length; i++) {
+      const char = cleanPrompt.charCodeAt(i);
+      hash = (hash << 5) - hash + char;
+      hash = hash & hash; // Convert to 32bit integer
+    }
+    return Math.abs(hash) % 1000000;
+  }, [url]);
 
   // Generate a stable URL using sanitization and correct pollination format
   const cleanUrl = useMemo(() => {
@@ -64,17 +107,35 @@ export function WatermarkedImage({ url }: { url: string }) {
     const cleanPrompt = sanitizePrompt(rawPrompt);
     const encodedPrompt = encodeURIComponent(cleanPrompt);
     
-    const seed = randomSeed + retryCount;
+    const seed = stableSeed + retryCount;
     return `https://image.pollinations.ai/p/${encodedPrompt}?width=1024&height=1024&seed=${seed}&nologo=true`;
-  }, [url, retryCount, randomSeed]);
+  }, [url, retryCount, stableSeed]);
+
+  const [status, setStatus] = useState<"loading" | "success" | "error">(() => {
+    return getSavedLoadedStatus(cleanUrl) ? "success" : "loading";
+  });
+
+  const [isDownloading, setIsDownloading] = useState(false);
+  const imgRef = useRef<HTMLImageElement>(null);
 
   useEffect(() => {
-    setStatus("loading");
+    if (getSavedLoadedStatus(cleanUrl)) {
+      setStatus("success");
+    } else {
+      setStatus("loading");
+    }
   }, [cleanUrl]);
 
   const handleRetry = () => {
     setStatus("loading");
-    setRetryCount((prev) => prev + 1); // increment retry key to force a seed shift and clear cache
+    setSavedLoadedStatus(cleanUrl, false); // clear cache status for the current url as precaution
+    setRetryCount((prev) => {
+      const next = prev + 1;
+      try {
+        localStorage.setItem(`prodixai-img-retry-${encodeURIComponent(url)}`, next.toString());
+      } catch (e) {}
+      return next;
+    });
   };
 
   // Handle high quality watermark render on download via canvas dynamically
@@ -197,16 +258,23 @@ export function WatermarkedImage({ url }: { url: string }) {
         referrerPolicy="no-referrer"
         onLoad={() => {
           setStatus("success");
+          setSavedLoadedStatus(cleanUrl, true);
         }}
         onError={() => {
           if (retryCount < 3) {
             console.warn(`Pollinations image loading failed in image tag. Retrying #${retryCount + 1}...`);
-            setRetryCount((prev) => prev + 1);
+            setRetryCount((prev) => {
+              const next = prev + 1;
+              try {
+                localStorage.setItem(`prodixai-img-retry-${encodeURIComponent(url)}`, next.toString());
+              } catch (e) {}
+              return next;
+            });
           } else {
             setStatus("error");
           }
         }}
-        className={`w-full h-auto max-h-[350px] sm:max-h-[450px] object-cover rounded-lg transition-opacity duration-300 ${status === "loading" ? "opacity-0 absolute w-0 h-0" : "opacity-100 relative"}`}
+        className={`w-full h-auto max-h-[350px] sm:max-h-[450px] object-cover rounded-lg transition-opacity duration-300 ${status === "loading" ? "opacity-0 absolute top-0 left-0 w-full h-full pointer-events-none" : "opacity-100 relative"}`}
       />
 
       {status === "success" && (

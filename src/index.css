@@ -91,14 +91,6 @@ body {
   background-attachment: fixed;
 }
 
-@keyframes header-gradient {
-  0% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-  100% { background-position: 0% 50%; }
-}
-
 .header-anim {
-  background: linear-gradient(-45deg, #128C7E, #25D366, #00BFA5);
-  background-size: 300% 300%;
-  animation: header-gradient 8s ease infinite;
+  background: #128C7E;
 }

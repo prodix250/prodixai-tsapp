@@ -8,15 +8,82 @@ import {
   Header, 
   Footer,
   PageNumber,
-  NumberFormat,
   Table,
   TableRow,
   TableCell,
   WidthType,
   BorderStyle
 } from "docx";
-import { saveAs } from "file-saver";
 import { downloadFile } from "./capacitorDownload";
+import { jsPDF } from "jspdf";
+import autoTable from "jspdf-autotable";
+
+// Helper to clean LaTeX math formats and convert them to a professional readable format using clean bold Unicode.
+function cleanMathText(line: string): { text: string; isMath: boolean } {
+  let isMath = false;
+  let clean = line.trim();
+  
+  // Handle block math delimiters
+  if (clean.startsWith("$$") && clean.endsWith("$$")) {
+    clean = clean.slice(2, -2).trim();
+    isMath = true;
+  } else if (clean.startsWith("$$")) {
+    clean = clean.replace(/\$\$/g, "").trim();
+    isMath = true;
+  } else if (clean.includes("$$")) {
+    clean = clean.replace(/\$\$/g, "").trim();
+    isMath = true;
+  }
+  
+  // Handle inline math delimiters
+  if (clean.includes("$")) {
+    clean = clean.replace(/\$/g, "").trim();
+    isMath = true;
+  }
+  
+  // Clean up common LaTeX codes and math symbols to make them look beautiful in standard Unicode
+  clean = clean
+    .replace(/\\times/g, " × ")
+    .replace(/\\cdot/g, " · ")
+    .replace(/\\div/g, " ÷ ")
+    .replace(/\\pm/g, " ± ")
+    .replace(/\\mp/g, " ∓ ")
+    .replace(/\\le/g, " ≤ ")
+    .replace(/\\ge/g, " ≥ ")
+    .replace(/\\ne/g, " ≠ ")
+    .replace(/\\approx/g, " ≈ ")
+    .replace(/\\equiv/g, " ≡ ")
+    .replace(/\\in/g, " ∈ ")
+    .replace(/\\notin/g, " ∉ ")
+    .replace(/\\subset/g, " ⊂ ")
+    .replace(/\\supset/g, " ⊃ ")
+    .replace(/\\cup/g, " ∪ ")
+    .replace(/\\cap/g, " ∩ ")
+    .replace(/\\forall/g, " ∀ ")
+    .replace(/\\exists/g, " ∃ ")
+    .replace(/\\nabla/g, " ∇ ")
+    .replace(/\\partial/g, " ∂ ")
+    .replace(/\\infty/g, " ∞ ")
+    .replace(/\\alpha/g, " α ")
+    .replace(/\\beta/g, " β ")
+    .replace(/\\gamma/g, " γ ")
+    .replace(/\\delta/g, " δ ")
+    .replace(/\\theta/g, " θ ")
+    .replace(/\\lambda/g, " λ ")
+    .replace(/\\mu/g, " μ ")
+    .replace(/\\pi/g, " π ")
+    .replace(/\\sigma/g, " σ ")
+    .replace(/\\omega/g, " ω ")
+    .replace(/\\Delta/g, " Δ ")
+    .replace(/\\Sigma/g, " Σ ")
+    .replace(/\\Omega/g, " Ω ")
+    .replace(/\\sqrt\{([^}]+)\}/g, "√($1)")
+    .replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, "($1)/($2)")
+    .replace(/_\{([^}]+)\}/g, "_$1")
+    .replace(/\^\{([^}]+)\}/g, "^$1");
+
+  return { text: clean, isMath };
+}
 
 // Helper to parse formatting (bold/italic) from markdown line
 function parseFormattedText(
@@ -24,23 +91,20 @@ function parseFormattedText(
   options: { 
     bold?: boolean; 
     italics?: boolean; 
-    size?: number; // half-points (e.g. 24 = 12pt)
+    size?: number; // half-points (e.g. 22 = 11pt)
     color?: string; 
     font?: string; 
   } = {}
 ): TextRun[] {
-  // Regex to match markdown bold (** or __) and italic (* or _)
-  // Simple tokenization of the text to render it in styled spans
   const tokens: { text: string; bold: boolean; italics: boolean }[] = [];
   
-  // A simple markdown rich-text inline tokenizer for Docx TextRuns
   let currentText = "";
   let i = 0;
   let isBold = false;
   let isItalic = false;
 
   while (i < text.length) {
-    if (text.substr(i, 2) === "**" || text.substr(i, 2) === "__") {
+    if (text.substring(i, i + 2) === "**" || text.substring(i, i + 2) === "__") {
       if (currentText) {
         tokens.push({ text: currentText, bold: isBold, italics: isItalic });
         currentText = "";
@@ -64,15 +128,98 @@ function parseFormattedText(
     tokens.push({ text: currentText, bold: isBold, italics: isItalic });
   }
 
-  // Map tokens to TextRuns
+  // Text color default (Dark Charcoal #202124)
   return tokens.map(token => new TextRun({
     text: token.text,
     bold: options.bold || token.bold,
     italics: options.italics || token.italics,
-    size: options.size ?? 22, // 11pt default
-    color: options.color ?? "2c3e50", // Dark charcoal off-black
+    size: options.size ?? 21, // ~10.5pt default
+    color: options.color ?? "202124", 
     font: options.font ?? "Calibri"
   }));
+}
+
+/**
+ * Parses both markdown formatting (*, **) AND LaTeX math expressions ($ or $$)
+ * and outputs a beautiful mix of standard runs (Calibri) and mathematical book runs (Times New Roman in italics).
+ */
+function parseMarkdownAndMathToRuns(
+  text: string, 
+  options: { 
+    bold?: boolean; 
+    italics?: boolean; 
+    size?: number; // half-points (e.g. 22 = 11pt)
+    color?: string; 
+    font?: string; 
+  } = {}
+): TextRun[] {
+  const runs: TextRun[] = [];
+  
+  // Determine if the entire line of text is a block formula (starts with $$) or standalone math
+  const cleanLine = text.trim();
+  if ((cleanLine.startsWith("$$") && cleanLine.endsWith("$$")) || cleanLine.startsWith("$$")) {
+    const mathContent = cleanMathText(cleanLine).text;
+    return [
+      new TextRun({
+        text: mathContent,
+        bold: true,
+        italics: true,
+        size: (options.size ?? 21) + 2, // Slightly larger for equations
+        color: "1A73E8", // Beautiful primary brand blue for textbook formulas
+        font: "Times New Roman"
+      })
+    ];
+  }
+
+  // Iterate to split raw text into Math parts and Standard Markdown parts
+  let currentSegment = "";
+  let inMath = false;
+  let i = 0;
+  
+  while (i < text.length) {
+    if (text[i] === "$" && (i === 0 || text[i-1] !== "\\")) {
+      if (currentSegment) {
+        if (inMath) {
+          // Process math content (convert latex to beautiful unicode and style with elegant Times serif)
+          const parsedMath = cleanMathText(currentSegment).text;
+          runs.push(new TextRun({
+            text: parsedMath,
+            bold: true,             // Bold makes mathematical variables extremely readable like in books!
+            italics: true,          // Formulas are elegantly italicized in professional textbooks
+            size: options.size ?? 21,
+            color: "1A73E8",        // Primary cobalt blue of ProdixAI
+            font: "Times New Roman" // Serif text-font for numbers and operators
+          }));
+        } else {
+          // Process standard text part with standard markdown
+          runs.push(...parseFormattedText(currentSegment, options));
+        }
+        currentSegment = "";
+      }
+      inMath = !inMath;
+    } else {
+      currentSegment += text[i];
+    }
+    i++;
+  }
+  
+  if (currentSegment) {
+    if (inMath) {
+      const parsedMath = cleanMathText(currentSegment).text;
+      runs.push(new TextRun({
+        text: parsedMath,
+        bold: true,
+        italics: true,
+        size: options.size ?? 21,
+        color: "1A73E8",
+        font: "Times New Roman"
+      }));
+    } else {
+      runs.push(...parseFormattedText(currentSegment, options));
+    }
+  }
+
+  return runs;
 }
 
 /**
@@ -84,25 +231,19 @@ function parseMarkdownTable(
   bodyColor: string
 ): Table | null {
   try {
-    // Process each row line
-    // e.g. | Header 1 | Header 2 |
     const rowsData: string[][] = [];
     
     for (const line of tableLines) {
-      // Step 1: Detect and skip lines that are purely ASCII-decorated dividers (e.g., +---+ or |----|)
       const cleanLine = line.trim();
       const isAsciiDivider = /^[+\-| =_#~*]+$/.test(cleanLine) && (cleanLine.includes("+") || cleanLine.includes("-") || cleanLine.includes("="));
       if (isAsciiDivider) {
         continue;
       }
 
-      // Split by '|' and trim parts
       const parts = line.split("|").map(p => p.trim());
-      // Remove first and last empty spots if they are empty (typical of | Cell 1 | Cell 2 |)
       if (parts[0] === "") parts.shift();
       if (parts[parts.length - 1] === "") parts.pop();
       
-      // Ignore divider lines like |---|---|
       const isDivider = parts.every(p => /^[-\s:]+$/.test(p));
       if (!isDivider && parts.length > 0) {
         rowsData.push(parts);
@@ -111,7 +252,6 @@ function parseMarkdownTable(
     
     if (rowsData.length === 0) return null;
     
-    // Header is row 0
     const headerRowData = rowsData[0];
     const dataRowsData = rowsData.slice(1);
     
@@ -131,33 +271,33 @@ function parseMarkdownTable(
               new TextRun({
                 text: cellText,
                 bold: true,
-                color: "000000", // Dark text on light gray header for high visibility
+                color: "FFFFFF", // White text
                 size: 20, // 10pt
                 font: "Calibri"
               })
             ],
-            alignment: AlignmentType.CENTER, // Center-align headers as requested
+            alignment: AlignmentType.START,
             spacing: { before: 120, after: 120, line: 276 }
           })
         ],
         shading: {
-          fill: "F2F2F2" // Header Row background: light grey (#F2F2F2)
+          fill: brandingColor // Header background: Primary (1A73E8)
         },
         margins: {
-          top: 120, // 120 twips (~2.4mm / minimum of 100 twips padding)
-          bottom: 120,
-          left: 120,
-          right: 120
+          top: 140, // Elegant professional padding
+          bottom: 140,
+          left: 140,
+          right: 140
         }
       });
     });
     
     tableRows.push(new TableRow({ children: headerCells }));
     
-    // Create Data Rows with alternating background colors
+    // Create Data Rows with alternating background colors (Zebra Striping)
     dataRowsData.forEach((rowData, rowIndex) => {
       const isEven = rowIndex % 2 === 0;
-      const rowFill = isEven ? "F9FAFB" : "FFFFFF"; // High-contrast subtle light grey alternating tint
+      const rowFill = isEven ? "FFFFFF" : "F1F3F4"; // White and Secondary (F1F3F4)
       
       const dataCells = rowData.map((cellText) => {
         return new TableCell({
@@ -167,12 +307,12 @@ function parseMarkdownTable(
           },
           children: [
             new Paragraph({
-              children: parseFormattedText(cellText, {
+              children: parseMarkdownAndMathToRuns(cellText, {
                 size: 20, // 10pt
                 color: bodyColor,
                 font: "Calibri"
               }),
-              alignment: AlignmentType.START, // Left-aligned body cell text
+              alignment: AlignmentType.START,
               spacing: { before: 100, after: 100, line: 276 }
             })
           ],
@@ -180,15 +320,14 @@ function parseMarkdownTable(
             fill: rowFill
           },
           margins: {
-            top: 120, // 120 twips padding
-            bottom: 120,
-            left: 120,
-            right: 120
+            top: 140,
+            bottom: 140,
+            left: 140,
+            right: 140
           }
         });
       });
       
-      // Pad empty cells if mismatch between columns
       while (dataCells.length < headerRowData.length) {
         dataCells.push(new TableCell({
           width: {
@@ -197,15 +336,14 @@ function parseMarkdownTable(
           },
           children: [new Paragraph("")],
           shading: { fill: rowFill },
-          margins: { top: 120, bottom: 120, left: 120, right: 120 }
+          margins: { top: 140, bottom: 140, left: 140, right: 140 }
         }));
       }
       
       tableRows.push(new TableRow({ children: dataCells }));
     });
     
-    // Standard professional 1pt borders (size: 8 in docx borders represents 1pt, color is a sleek corporate gray)
-    const professionalBorder = { style: BorderStyle.SINGLE, size: 8, color: "D1D5DB" };
+    const professionalBorder = { style: BorderStyle.SINGLE, size: 8, color: "CBD5E1" }; // Soft clean border
     
     return new Table({
       width: {
@@ -229,13 +367,9 @@ function parseMarkdownTable(
 }
 
 function tokenizeCodeLine(line: string): TextRun[] {
-  // Regex to capture:
-  // 1 (comment): //... or /*...*/
-  // 2 (string): "... " or '...' or `...`
-  // 3 (keyword): export, const, let, return, function, etc.
-  // 4 (function): any name followed by (
-  // 5 (numberBool): numbers or true/false/null/undefined
-  const tokenRegex = /(\/\/.*|\/\*.*?\*\/)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)|(\b(?:export|import|from|function|const|let|var|return|if|else|class|default|async|await|try|catch|throw|new|interface|type|extends|implements|typeof|instanceof|switch|case|break|continue|for|while|do|in|of)\b)|(\b[a-zA-Z_]\w*(?=\s*\())|(\b\d+(?:\.\d+)?\b|\b(?:true|false|null|undefined)\b)/g;
+  // Regex for precision VS Code syntax highlighting inside the .docx generator.
+  // Correctly balanced with exactly two closing parentheses after literal lookahead open `(?=\s*\())`.
+  const tokenRegex = /(\/\/.*|\/\*[\s\S]*?\*\/)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)|(\b(?:export|import|from|function|const|let|var|return|if|else|class|default|async|await|try|catch|throw|new|interface|type|extends|implements|typeof|instanceof|switch|case|break|continue|for|while|do|in|of|void|public|private|protected|static|readonly)\b)|(\b[a-zA-Z_]\w*(?=\s*\())|([\+\-\*\/%=<>!&|^~]+|\b\d+(?:\.\d+)?\b|\b(?:true|false|null|undefined)\b)/g;
 
   let lastIndex = 0;
   const runs: TextRun[] = [];
@@ -244,32 +378,36 @@ function tokenizeCodeLine(line: string): TextRun[] {
   while ((match = tokenRegex.exec(line)) !== null) {
     const index = match.index;
     
-    // Add normal text before the match
     if (index > lastIndex) {
       runs.push(new TextRun({
         text: line.substring(lastIndex, index),
         size: 19, // ~9.5pt
-        color: "ABB2BF",
+        color: "D4D4D4", // Default off-white text inside dark boxes
         font: "Consolas"
       }));
     }
 
     const matchedText = match[0];
-
-    let color = "ABB2BF";
+    let color = "D4D4D4";
     let italics = false;
 
     if (match[1]) {
-      color = "5C6370"; // Comment grey
+      color = "6A9955"; // Comments: Leafy Green #6A9955
       italics = true;
     } else if (match[2]) {
-      color = "98C379"; // String green
+      color = "CE9178"; // Strings: Orange #CE9178
     } else if (match[3]) {
-      color = "C678DD"; // Keyword purple
+      color = "569CD6"; // Keywords: Bright Blue #569CD6
     } else if (match[4]) {
-      color = "61AFEF"; // Function blue
+      color = "4E97C9"; // Functions: Cyan-Blue #4E97C9
     } else if (match[5]) {
-      color = "D19A66"; // Number/Bool orange
+      const matchText = match[5];
+      const isNumberOrBool = /^\d+(\.\d+)?$|^(true|false|null|undefined)$/.test(matchText);
+      if (isNumberOrBool) {
+        color = "CE9178"; // Numbers/Booleans: Orange #CE9178
+      } else {
+        color = "9D9D9D"; // Operators: Subtle Gray #9D9D9D
+      }
     }
 
     runs.push(new TextRun({
@@ -283,17 +421,15 @@ function tokenizeCodeLine(line: string): TextRun[] {
     lastIndex = tokenRegex.lastIndex;
   }
 
-  // Add remaining normal text
   if (lastIndex < line.length) {
     runs.push(new TextRun({
       text: line.substring(lastIndex),
       size: 19,
-      color: "ABB2BF",
+      color: "D4D4D4",
       font: "Consolas"
     }));
   }
 
-  // If empty line, add relative space to preserve line flow
   if (runs.length === 0) {
     runs.push(new TextRun({
       text: " ",
@@ -305,19 +441,6 @@ function tokenizeCodeLine(line: string): TextRun[] {
   return runs;
 }
 
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      resolve(reader.result as string);
-    };
-    reader.onerror = () => {
-      reject(new Error("Failed to convert Blob to Base64."));
-    };
-    reader.readAsDataURL(blob);
-  });
-}
-
 export async function generateProfessionalDoc(
   title: string, 
   rawMarkdown: string, 
@@ -327,15 +450,13 @@ export async function generateProfessionalDoc(
   const lines = rawMarkdown.split("\n");
   const storyParagraphs: (Paragraph | Table)[] = [];
 
-  // Define Branding Palette
-  const brandingColor = "1E3A8A"; // Deep Navy
-  const secondaryColor = "475569"; // Slate gray
-  const bodyColor = "334155"; // Dark Slate
-  const accentColor = "0D9488"; // Teal/Green accent
+  // Define Professional 5-Color Palette (DOCX style - Hex string format)
+  const brandingColor = "1A73E8"; // Primary: Deep Blue Accent
+  const secondaryColor = "808080"; // Secondary Label: Gray
+  const bodyColor = "202124"; // Text: Dark Charcoal
+  const codeBgColor = "1E1E1E"; // Code Background: VS Code Dark
 
-  // Cover / Header block depending on Document Type
   if (docType === "report") {
-    // Add Report Header Panel
     storyParagraphs.push(
       new Paragraph({
         children: [
@@ -365,7 +486,6 @@ export async function generateProfessionalDoc(
       })
     );
   } else if (docType === "letter") {
-    // Formal Letter Head
     storyParagraphs.push(
       new Paragraph({
         children: [
@@ -405,9 +525,6 @@ export async function generateProfessionalDoc(
     );
   }
 
-  // Parse lines to build Paragraphs
-  let inList = false;
-
   for (let idx = 0; idx < lines.length; idx++) {
     const rawLine = lines[idx];
     const line = rawLine.trim();
@@ -415,7 +532,7 @@ export async function generateProfessionalDoc(
       continue;
     }
 
-    // Markdown Code Block Detector (triple backticks)
+    // Markdown Code Block Detector
     if (line.startsWith("```")) {
       const codeLines: string[] = [];
       let codeIdx = idx + 1;
@@ -429,9 +546,8 @@ export async function generateProfessionalDoc(
         codeIdx++;
       }
       
-      idx = codeIdx; // advance the main iteration pointer to skip internal code and closing tick
+      idx = codeIdx; 
       
-      // Tokenize each line into standard TextRuns for Consolas VS Code style syntax coloring
       const codeParagraphs = codeLines.map((codeLine) => {
         return new Paragraph({
           children: tokenizeCodeLine(codeLine),
@@ -445,10 +561,10 @@ export async function generateProfessionalDoc(
           type: WidthType.PERCENTAGE
         },
         borders: {
-          top: { style: BorderStyle.SINGLE, size: 4, color: "3E4451" },
-          bottom: { style: BorderStyle.SINGLE, size: 4, color: "3E4451" },
-          left: { style: BorderStyle.SINGLE, size: 4, color: "3E4451" },
-          right: { style: BorderStyle.SINGLE, size: 4, color: "3E4451" },
+          top: { style: BorderStyle.SINGLE, size: 4, color: codeBgColor },
+          bottom: { style: BorderStyle.SINGLE, size: 4, color: codeBgColor },
+          left: { style: BorderStyle.SINGLE, size: 4, color: codeBgColor },
+          right: { style: BorderStyle.SINGLE, size: 4, color: codeBgColor },
           insideHorizontal: { style: BorderStyle.NONE },
           insideVertical: { style: BorderStyle.NONE }
         },
@@ -458,10 +574,10 @@ export async function generateProfessionalDoc(
               new TableCell({
                 children: codeParagraphs,
                 shading: {
-                  fill: "282C34" // dark background shading matching VS Code themes
+                  fill: codeBgColor // VS Code Dark Background (#1E1E1E)
                 },
                 margins: {
-                  top: 140, // 140 twips (~2.8mm padding)
+                  top: 140, 
                   bottom: 140,
                   left: 180,
                   right: 180
@@ -473,7 +589,6 @@ export async function generateProfessionalDoc(
       });
       
       storyParagraphs.push(codeBlockTable);
-      inList = false;
       continue;
     }
 
@@ -482,7 +597,6 @@ export async function generateProfessionalDoc(
       const nextLine = lines[idx + 1].trim();
       const isTableDivider = nextLine.includes("|") && /^[|:\s-]+$/.test(nextLine);
       if (isTableDivider) {
-        // Collect all consecutive lines that contain "|"
         const tableLines: string[] = [];
         let tableIdx = idx;
         while (tableIdx < lines.length && lines[tableIdx].trim().includes("|")) {
@@ -490,25 +604,22 @@ export async function generateProfessionalDoc(
           tableIdx++;
         }
         
-        // Advance the outer loop iterator
         idx = tableIdx - 1;
         
-        // Parse raw table lines to beautiful Word docx Table
         const docxTable = parseMarkdownTable(tableLines, brandingColor, bodyColor);
         if (docxTable) {
           storyParagraphs.push(docxTable);
         }
-        inList = false;
         continue;
       }
     }
 
-    // Markdown Headers
+    // Headers
     if (line.startsWith("# ")) {
       const headerText = line.substring(2);
       storyParagraphs.push(
         new Paragraph({
-          children: parseFormattedText(headerText, {
+          children: parseMarkdownAndMathToRuns(headerText, {
             bold: true,
             size: 32, // 16pt
             color: brandingColor,
@@ -518,12 +629,11 @@ export async function generateProfessionalDoc(
           spacing: { before: 360, after: 120 }
         })
       );
-      inList = false;
     } else if (line.startsWith("## ")) {
       const headerText = line.substring(3);
       storyParagraphs.push(
         new Paragraph({
-          children: parseFormattedText(headerText, {
+          children: parseMarkdownAndMathToRuns(headerText, {
             bold: true,
             size: 26, // 13pt
             color: brandingColor,
@@ -533,12 +643,11 @@ export async function generateProfessionalDoc(
           spacing: { before: 240, after: 100 }
         })
       );
-      inList = false;
     } else if (line.startsWith("### ")) {
       const headerText = line.substring(4);
       storyParagraphs.push(
         new Paragraph({
-          children: parseFormattedText(headerText, {
+          children: parseMarkdownAndMathToRuns(headerText, {
             bold: true,
             size: 22, // 11pt
             color: secondaryColor,
@@ -548,74 +657,65 @@ export async function generateProfessionalDoc(
           spacing: { before: 180, after: 80 }
         })
       );
-      inList = false;
     }
-    // Lists (- or * or numbered list)
+    // Lists
     else if (line.startsWith("- ") || line.startsWith("* ") || line.startsWith("• ")) {
       const listContent = line.substring(2);
       storyParagraphs.push(
         new Paragraph({
-          children: parseFormattedText(listContent, { size: 21, color: bodyColor }),
+          children: parseMarkdownAndMathToRuns(listContent, { size: 21, color: bodyColor }),
           bullet: {
             level: 0
           },
-          spacing: { before: 40, after: 40, line: 276 } // Professional 1.15 line spacing
+          spacing: { before: 40, after: 40, line: 276 }
         })
       );
-      inList = true;
     } else if (/^\d+\.\s/.test(line)) {
-      // Numbered List
       const listContent = line.replace(/^\d+\.\s/, "");
       storyParagraphs.push(
         new Paragraph({
           children: [
             new TextRun({ text: line.match(/^\d+\.\s/)?.[0] || "1. ", bold: true, size: 21, color: brandingColor }),
-            ...parseFormattedText(listContent, { size: 21, color: bodyColor })
+            ...parseMarkdownAndMathToRuns(listContent, { size: 21, color: bodyColor })
           ],
-          spacing: { before: 60, after: 60, line: 276 } // Professional 1.15 line spacing
+          spacing: { before: 60, after: 60, line: 276 }
         })
       );
-      inList = true;
     }
-    // Blockquotes/Special Highlight Card
+    // Blockquotes
     else if (line.startsWith("> ")) {
       const blockQuote = line.substring(2);
       storyParagraphs.push(
         new Paragraph({
-          children: parseFormattedText(blockQuote, { size: 20, italics: true, color: secondaryColor }),
-          indent: { left: 720 }, // indentation of 0.5 inch
-          spacing: { before: 120, after: 120, line: 276 } // Professional 1.15 line spacing
+          children: parseMarkdownAndMathToRuns(blockQuote, { size: 20, italics: true, color: brandingColor }),
+          indent: { left: 720 },
+          spacing: { before: 120, after: 120, line: 276 }
         })
       );
-      inList = false;
     }
-    // Table/Rulers or custom signatures
+    // Custom Signatures & Standard text
     else if (line.toLowerCase().startsWith("sincerely,") || line.toLowerCase().startsWith("best regards,") || line.toLowerCase().startsWith("kind regards,")) {
       storyParagraphs.push(
         new Paragraph({
-          children: parseFormattedText(line, { size: 22, bold: true, color: bodyColor }),
+          children: parseMarkdownAndMathToRuns(line, { size: 22, bold: true, color: bodyColor }),
           spacing: { before: 480, after: 60 }
         })
       );
-      inList = false;
     } else {
-      // Normal Paragraph
       const alignment = docType === "letter" && (line.includes("Sincerely") || line.includes("Regards") || line.includes("Uwumukiza Kevin") || line.includes("Sincerely yours")) 
         ? AlignmentType.START 
         : AlignmentType.BOTH;
 
       storyParagraphs.push(
         new Paragraph({
-          children: parseFormattedText(line, { size: 21, color: bodyColor }),
+          children: parseMarkdownAndMathToRuns(line, { size: 21, color: bodyColor }),
           alignment: alignment,
-          spacing: { before: 120, after: 120, line: 276 } // Line spacing of 1.15
+          spacing: { before: 120, after: 120, line: 276 }
         })
       );
-      inList = false;
     }
   }
 
-  // Create document sections
   const doc = new Document({
     sections: [
       {
@@ -637,8 +737,8 @@ export async function generateProfessionalDoc(
                   new TextRun({
                     text: "ProdixAI Official Document",
                     bold: true,
-                    size: 18, // 9pt
-                    color: "94a3b8" // Slate light
+                    size: 18, 
+                    color: "808080" // Gray Comments
                   })
                 ],
                 alignment: AlignmentType.END,
@@ -655,18 +755,18 @@ export async function generateProfessionalDoc(
                   new TextRun({
                     text: "Powered by ProdixAI Systems",
                     italics: true,
-                    size: 16, // 8pt
-                    color: "94a3b8"
+                    size: 16, 
+                    color: "808080"
                   }),
                   new TextRun({
                     text: "\t\tPage ",
                     size: 16,
-                    color: "94a3b8"
+                    color: "808080"
                   }),
                   new TextRun({
                     children: [PageNumber.CURRENT],
                     size: 16,
-                    color: "94a3b8"
+                    color: "808080"
                   })
                 ],
                 alignment: AlignmentType.END,
@@ -676,59 +776,655 @@ export async function generateProfessionalDoc(
           })
         },
         children: [
-          // Title on Cover / First Paragraph
           new Paragraph({
             children: [
               new TextRun({
                 text: cleanTitle,
                 bold: true,
-                size: docType === "report" ? 36 : 28, // Heading-size
+                size: docType === "report" ? 36 : 28, 
                 color: brandingColor,
                 font: "Calibri"
               })
             ],
             spacing: { before: docType === "report" ? 360 : 120, after: docType === "report" ? 240 : 120 }
           }),
-          // Add Divider Line for visual hierarchy
           new Paragraph({
             children: [
               new TextRun({
                 text: "_________________________________________________________________________________",
-                color: "CBD5E1" // grey divider border
+                color: "F1F3F4" // Secondary light divider
               })
             ],
             spacing: { after: 360 }
           }),
-          // Rest of story paragraphs
           ...storyParagraphs
         ]
       }
     ]
   });
 
-  // Pack and Save
   const baseBlob = await Packer.toBlob(doc);
-  // Ensure the exact Word document MIME type is used strictly
   const finalBlob = new Blob([baseBlob], {
     type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
   });
   
-  // Make filename very short and meaningful (maximum 2-3 essential words)
   let words = cleanTitle
     .replace(/[^a-zA-Z0-9\s-]/g, "")
     .split(/\s+/)
-    .filter(w => w.length > 2); // Filter out helper/short words
+    .filter(w => w.length > 2); 
   
   if (words.length === 0) {
     words = ["Document"];
   }
   
-  // Keep only the first 2-3 essential words to retain 100% compatibility with phone downloads
   const shortWords = words.slice(0, 3);
   const formattedFileName = shortWords.map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join("_") || "Doc";
-  
   const fileNameWithExt = `${formattedFileName}.docx`;
 
-  // Save/Share using our unified helper (handles Android Capacitor files/shares & Web downloads smoothly)
   await downloadFile(finalBlob, fileNameWithExt);
+}
+
+function cleanAndShortenDocTitle(rawTitle: string): string {
+  if (!rawTitle) return "Doc";
+  let title = rawTitle.replace(/[#*`_-]/g, "").trim();
+  const noise = ["official", "report", "document", "inyandiko", "ibaruwa", "yo", "kuri", "yase", "gufasha", "gusaba", "akazi", "y'", "w'", "bwa", "kwa"];
+  let words = title.split(/\s+/).filter(w => {
+    const wl = w.toLowerCase();
+    return w.length > 2 && !noise.includes(wl);
+  });
+  if (words.length === 0) return "Doc";
+  return words.slice(0, 3).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join("_");
+}
+
+interface SyntaxToken {
+  text: string;
+  color: [number, number, number];
+}
+
+function tokenizeCodeLineForPdf(line: string): SyntaxToken[] {
+  // Regex for precision VS Code syntax highlighting inside the .pdf generator.
+  // Correctly balanced with exactly two closing parentheses after literal lookahead open `(?=\s*\())`.
+  const tokenRegex = /(\/\/.*|\/\*[\s\S]*?\*\/)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)|(\b(?:export|import|from|function|const|let|var|return|if|else|class|default|async|await|try|catch|throw|new|interface|type|extends|implements|typeof|instanceof|switch|case|break|continue|for|while|do|in|of|void|public|private|protected|static|readonly)\b)|(\b[a-zA-Z_]\w*(?=\s*\())|([\+\-\*\/%=<>!&|^~]+|\b\d+(\.\d+)?\b|\b(?:true|false|null|undefined)\b)/g;
+
+  let lastIndex = 0;
+  const tokens: SyntaxToken[] = [];
+  let match;
+
+  while ((match = tokenRegex.exec(line)) !== null) {
+    const index = match.index;
+    
+    if (index > lastIndex) {
+      tokens.push({
+        text: line.substring(lastIndex, index),
+        color: [212, 212, 212] // VS Code Default White/gray text (#D4D4D4)
+      });
+    }
+
+    const matchedText = match[0];
+    let color: [number, number, number] = [212, 212, 212];
+
+    if (match[1]) {
+      color = [106, 153, 85]; // Comments: Leafy Green #6A9955 (106, 153, 85)
+    } else if (match[2]) {
+      color = [206, 145, 120]; // Strings: Orange #CE9178 (206, 145, 120)
+    } else if (match[3]) {
+      color = [86, 156, 214]; // Keywords: Bright Blue #569CD6 (86, 156, 214)
+    } else if (match[4]) {
+      color = [78, 151, 201]; // Functions: Cyan-Blue #4E97C9 (78, 151, 201)
+    } else if (match[5]) {
+      const matchText = match[5];
+      const isNumberOrBool = /^\d+(\.\d+)?$|^(true|false|null|undefined)$/.test(matchText);
+      if (isNumberOrBool) {
+        color = [206, 145, 120]; // Numbers/Booleans: Orange #CE9178 (206, 145, 120)
+      } else {
+        color = [157, 157, 157]; // Operators: Subtle Gray #9D9D9D (157, 157, 157)
+      }
+    }
+
+    tokens.push({
+      text: matchedText,
+      color: color
+    });
+
+    lastIndex = tokenRegex.lastIndex;
+  }
+
+  if (lastIndex < line.length) {
+    tokens.push({
+      text: line.substring(lastIndex),
+      color: [212, 212, 212]
+    });
+  }
+
+  if (tokens.length === 0) {
+    tokens.push({
+      text: " ",
+      color: [212, 212, 212]
+    });
+  }
+
+  return tokens;
+}
+
+interface PdfRichSegment {
+  text: string;
+  font: "helvetica" | "times" | "courier";
+  style: "normal" | "bold" | "italic" | "bolditalic";
+  color: [number, number, number];
+  size: number;
+}
+
+function parseLineToPdfSegments(
+  text: string,
+  baseColor: [number, number, number],
+  baseSize: number,
+  isHeader: boolean = false
+): PdfRichSegment[] {
+  const segments: PdfRichSegment[] = [];
+  
+  // If the entire text line is block math
+  const cleanLine = text.trim();
+  if ((cleanLine.startsWith("$$") && cleanLine.endsWith("$$")) || cleanLine.startsWith("$$")) {
+    const mathContent = cleanMathText(cleanLine).text;
+    return [{
+      text: mathContent,
+      font: "times",
+      style: "bolditalic",
+      color: [26, 115, 232], // Royal Blue Signature Brand Color for clean mathematical terms
+      size: baseSize + 1
+    }];
+  }
+
+  // Iterate to split raw text into math segments or text segments
+  let currentSegment = "";
+  let inMath = false;
+  let i = 0;
+  
+  const addTextSegment = (txt: string, inMathMode: boolean) => {
+    if (!txt) return;
+    if (inMathMode) {
+      const mathText = cleanMathText(txt).text;
+      segments.push({
+        text: mathText,
+        font: "times",
+        style: "bolditalic",
+        color: [26, 115, 232],
+        size: baseSize
+      });
+    } else {
+      // Parse markdown bold (**) and italics (*) inside the non-math segment
+      let j = 0;
+      let bold = false;
+      let italic = false;
+      let part = "";
+      
+      while (j < txt.length) {
+        if (txt.substring(j, j + 2) === "**" || txt.substring(j, j + 2) === "__") {
+          if (part) {
+            segments.push({
+              text: part,
+              font: "helvetica",
+              style: isHeader ? "bold" : (bold ? (italic ? "bolditalic" : "bold") : (italic ? "italic" : "normal")),
+              color: baseColor,
+              size: baseSize
+            });
+            part = "";
+          }
+          bold = !bold;
+          j += 2;
+        } else if (txt[j] === "*" || txt[j] === "_") {
+          if (part) {
+            segments.push({
+              text: part,
+              font: "helvetica",
+              style: isHeader ? "bold" : (bold ? (italic ? "bolditalic" : "bold") : (italic ? "italic" : "normal")),
+              color: baseColor,
+              size: baseSize
+            });
+            part = "";
+          }
+          italic = !italic;
+          j += 1;
+        } else {
+          part += txt[j];
+          j++;
+        }
+      }
+      if (part) {
+        segments.push({
+          text: part,
+          font: "helvetica",
+          style: isHeader ? "bold" : (bold ? (italic ? "bolditalic" : "bold") : (italic ? "italic" : "normal")),
+          color: baseColor,
+          size: baseSize
+        });
+      }
+    }
+  };
+
+  while (i < text.length) {
+    if (text[i] === "$" && (i === 0 || text[i - 1] !== "\\")) {
+      addTextSegment(currentSegment, inMath);
+      currentSegment = "";
+      inMath = !inMath;
+    } else {
+      currentSegment += text[i];
+    }
+    i++;
+  }
+  
+  addTextSegment(currentSegment, inMath);
+  
+  return segments;
+}
+
+function drawRichParagraphForPdf(
+  doc: jsPDF,
+  text: string,
+  xStart: number,
+  yStart: number,
+  maxWidth: number,
+  baseColor: [number, number, number],
+  baseSize: number,
+  lineHeight: number,
+  checkPageBreakFn: (currentY: number, neededHeight: number) => number,
+  isHeader: boolean = false
+): number {
+  const segments = parseLineToPdfSegments(text, baseColor, baseSize, isHeader);
+  
+  interface PdfWord {
+    text: string;
+    segment: PdfRichSegment;
+  }
+  const words: PdfWord[] = [];
+  
+  segments.forEach((seg) => {
+    const parts = seg.text.split(/(\s+)/);
+    parts.forEach((part) => {
+      if (part) {
+        words.push({
+          text: part,
+          segment: seg
+        });
+      }
+    });
+  });
+
+  let currentY = yStart;
+  let currentX = xStart;
+  
+  let lineSegments: { text: string; segment: PdfRichSegment }[] = [];
+  let currentLineWidth = 0;
+  
+  const flushLine = () => {
+    if (lineSegments.length === 0) return;
+    
+    // Page break is handled dynamically and synchronizes perfectly across blocks
+    currentY = checkPageBreakFn(currentY, lineHeight);
+    
+    lineSegments.forEach((item) => {
+      doc.setFont(item.segment.font, item.segment.style);
+      doc.setFontSize(item.segment.size);
+      doc.setTextColor(item.segment.color[0], item.segment.color[1], item.segment.color[2]);
+      
+      doc.text(item.text, currentX, currentY);
+      currentX += doc.getTextWidth(item.text);
+    });
+    
+    currentY += lineHeight;
+    currentX = xStart;
+    lineSegments = [];
+    currentLineWidth = 0;
+  };
+
+  words.forEach((w) => {
+    doc.setFont(w.segment.font, w.segment.style);
+    doc.setFontSize(w.segment.size);
+    const wordWidth = doc.getTextWidth(w.text);
+    
+    if (currentLineWidth + wordWidth > maxWidth && w.text.trim() !== "") {
+      flushLine();
+    }
+    
+    lineSegments.push(w);
+    currentLineWidth += wordWidth;
+  });
+  
+  flushLine();
+  
+  return currentY;
+}
+
+export async function generateProfessionalPdf(
+  title: string,
+  rawMarkdown: string,
+  docType: "letter" | "report" | "general"
+) {
+  const doc = new jsPDF({
+    orientation: "portrait",
+    unit: "mm",
+    format: "a4"
+  });
+
+  const cleanTitle = title.trim() || "Prodix_Document";
+  const lines = rawMarkdown.split("\n");
+
+  let y = 20; 
+  const marginX = 20;
+  const maxPageHeight = 270; 
+  const pageWidth = Number(doc.internal.pageSize.getWidth());
+  const contentWidth = pageWidth - (marginX * 2);
+
+  const checkPageBreak = (currentY: number, neededHeight: number): number => {
+    if (currentY + neededHeight > maxPageHeight) {
+      doc.addPage();
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      doc.setTextColor(128, 128, 128); // Comments/MetaData: Gray #808080
+      doc.text("ProdixAI Official Document", pageWidth - marginX, 10, { align: "right" });
+      doc.setDrawColor(241, 243, 244); // Secondary Divider Line
+      doc.line(marginX, 12, pageWidth - marginX, 12);
+      return 20;
+    }
+    return currentY;
+  };
+
+  // Draw first page header
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.setTextColor(128, 128, 128); // Gray Comments
+  doc.text("ProdixAI Official Document", pageWidth - marginX, 10, { align: "right" });
+
+  if (docType === "report") {
+    y = checkPageBreak(y, 30);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(18);
+    doc.setTextColor(26, 115, 232); // Primary Theme Color: 1A73E8 Deep Blue
+    doc.text(cleanTitle.toUpperCase(), pageWidth / 2, y, { align: "center" });
+    y += 8;
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.setTextColor(128, 128, 128); // Gray
+    doc.text("TECHNICAL BRIEF & INFORMATION REPORT", pageWidth / 2, y, { align: "center" });
+    y += 15;
+  } else if (docType === "letter") {
+    y = checkPageBreak(y, 25);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(13);
+    doc.setTextColor(26, 115, 232); // Primary Theme Color
+    doc.text("PRODIXAI SYSTEMS", marginX, y);
+    y += 5;
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(128, 128, 128); // Gray
+    doc.text("Kigali, Rwanda  |  Email: contact.prodixai@gmail.com", marginX, y);
+    y += 6;
+
+    doc.setFont("helvetica", "italic");
+    doc.setFontSize(10);
+    doc.setTextColor(32, 33, 36); // Text: Dark Charcoal #202124
+    doc.text(`Date: ${new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}`, marginX, y);
+    y += 10;
+  } else {
+    y = checkPageBreak(y, 15);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(14);
+    doc.setTextColor(26, 115, 232); // Primary Theme Color
+    doc.text(cleanTitle, marginX, y);
+    y += 8;
+  }
+
+  doc.setDrawColor(241, 243, 244); // #F1F3F4 Secondary Divider line
+  doc.setLineWidth(0.3);
+  doc.line(marginX, y, pageWidth - marginX, y);
+  y += 10;
+
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i];
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    if (i === 0 && (line.startsWith("# ") || line.startsWith("## "))) {
+      const headerText = line.replace(/^#+\s+/, "");
+      if (headerText.toLowerCase() === cleanTitle.toLowerCase()) {
+        continue;
+      }
+    }
+
+    if (line.startsWith("# ")) {
+      const headerText = line.substring(2);
+      y = drawRichParagraphForPdf(
+        doc,
+        headerText,
+        marginX,
+        y,
+        contentWidth,
+        [26, 115, 232],
+        14,
+        6,
+        checkPageBreak,
+        true
+      ) + 4;
+    } else if (line.startsWith("## ")) {
+      const headerText = line.substring(3);
+      y = drawRichParagraphForPdf(
+        doc,
+        headerText,
+        marginX,
+        y,
+        contentWidth,
+        [26, 115, 232],
+        12,
+        5,
+        checkPageBreak,
+        true
+      ) + 3;
+    } else if (line.startsWith("### ")) {
+      const headerText = line.substring(4);
+      y = drawRichParagraphForPdf(
+        doc,
+        headerText,
+        marginX,
+        y,
+        contentWidth,
+        [128, 128, 128],
+        11,
+        5,
+        checkPageBreak,
+        true
+      ) + 2;
+    } else if (line.startsWith("> ")) {
+      const quoteText = line.substring(2);
+      const startY = y;
+      
+      y = drawRichParagraphForPdf(
+        doc,
+        quoteText,
+        marginX + 6,
+        y,
+        contentWidth - 8,
+        [128, 128, 128],
+        10,
+        5,
+        checkPageBreak
+      );
+      
+      const endY = y;
+      doc.setDrawColor(26, 115, 232); // Primary color left accent Quote indicator
+      doc.setLineWidth(0.8);
+      doc.line(marginX + 2, startY - 3, marginX + 2, endY - 3);
+      y += 3;
+    } else if (line.startsWith("- ") || line.startsWith("* ") || line.startsWith("• ")) {
+      const listContent = line.substring(2);
+      y = checkPageBreak(y, 8);
+      doc.setFillColor(26, 115, 232); // Primary color bullets
+      doc.circle(marginX + 3, y - 1, 0.8, "F");
+      
+      y = drawRichParagraphForPdf(
+        doc,
+        listContent,
+        marginX + 8,
+        y,
+        contentWidth - 8,
+        [32, 33, 36],
+        10,
+        5,
+        checkPageBreak
+      ) + 1;
+    } else if (/^\d+\.\s/.test(line)) {
+      const match = line.match(/^(\d+\.\s)/);
+      const numPrefix = match ? match[1] : "1. ";
+      const listContent = line.replace(/^\d+\.\s/, "");
+      
+      y = checkPageBreak(y, 8);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.setTextColor(26, 115, 232); // Primary color
+      doc.text(numPrefix, marginX, y);
+      
+      y = drawRichParagraphForPdf(
+        doc,
+        listContent,
+        marginX + 8,
+        y,
+        contentWidth - 8,
+        [32, 33, 36],
+        10,
+        5,
+        checkPageBreak
+      ) + 1;
+    } else if (line.startsWith("```")) {
+      const codeLines: string[] = [];
+      let codeIdx = i + 1;
+      while (codeIdx < lines.length && !lines[codeIdx].trim().startsWith("```")) {
+        codeLines.push(lines[codeIdx]);
+        codeIdx++;
+      }
+      i = codeIdx;
+
+      // 4.5mm per line plus 4mm top/bottom padding inside VS Code styled box
+      const boxHeight = 8 + (codeLines.length * 4.5);
+      y = checkPageBreak(y, boxHeight + 5);
+
+      doc.setFillColor(30, 30, 30); // Code Background: #1E1E1E Dark VS Code (30, 30, 30)
+      doc.roundedRect(marginX, y, contentWidth, boxHeight, 1.5, 1.5, "F");
+
+      let currentCodeY = y + 5.5; 
+      doc.setFont("courier", "normal");
+      doc.setFontSize(8.5);
+
+      codeLines.forEach((codeLine) => {
+        let currentX = marginX + 4;
+        const tokens = tokenizeCodeLineForPdf(codeLine);
+        tokens.forEach(token => {
+          doc.setTextColor(token.color[0], token.color[1], token.color[2]);
+          doc.text(token.text, currentX, currentCodeY);
+          currentX += doc.getTextWidth(token.text);
+        });
+        currentCodeY += 4.5;
+      });
+
+      y += boxHeight + 4;
+    } else if (line.startsWith("|")) {
+      const tableLines: string[] = [];
+      let tableIdx = i;
+      while (tableIdx < lines.length && lines[tableIdx].trim().startsWith("|")) {
+        tableLines.push(lines[tableIdx].trim());
+        tableIdx++;
+      }
+      i = tableIdx - 1;
+
+      const parsedRows: string[][] = [];
+      tableLines.forEach((tLine) => {
+        const cleanTLine = tLine.trim();
+        const isAsciiDivider = /^[+\-| =_#~*]+$/.test(cleanTLine) && (cleanTLine.includes("+") || cleanTLine.includes("-") || cleanTLine.includes("="));
+        if (isAsciiDivider) return;
+
+        const parts = tLine.split("|").map(p => p.trim());
+        if (parts[0] === "") parts.shift();
+        if (parts[parts.length - 1] === "") parts.pop();
+
+        const isDivider = parts.every(p => /^[-\s:]+$/.test(p));
+        if (!isDivider && parts.length > 0) {
+          parsedRows.push(parts);
+        }
+      });
+
+      if (parsedRows.length > 0) {
+        const headers = parsedRows[0];
+        const body = parsedRows.slice(1);
+
+        // Render dynamically stunning zebra tables with autoTable
+        autoTable(doc, {
+          startY: y,
+          head: [headers],
+          body: body,
+          theme: "striped",
+          headStyles: {
+            fillColor: [26, 115, 232], // Primary Theme Color (1A73E8)
+            textColor: [255, 255, 255], 
+            fontStyle: "bold",
+            fontSize: 9,
+            font: "helvetica",
+            halign: "left"
+          },
+          bodyStyles: {
+            textColor: [32, 33, 36], // Text Dark Charcoal: #202124 (32, 33, 36)
+            fontSize: 8.5,
+            font: "helvetica"
+          },
+          alternateRowStyles: {
+            fillColor: [241, 243, 244] // Secondary: #F1F3F4 Zebra pattern
+          },
+          tableLineColor: [203, 213, 225], // clear border (#CBD5E1)
+          tableLineWidth: 0.2,
+          styles: {
+            cellPadding: 3,
+            lineColor: [203, 213, 225],
+            lineWidth: 0.2
+          },
+          margin: { left: marginX, right: marginX }
+        });
+
+        y = (doc as any).lastAutoTable.finalY + 8;
+      }
+    } else {
+      let pColor: [number, number, number] = [32, 33, 36];
+      if (line.toLowerCase().startsWith("sincerely,") || line.toLowerCase().startsWith("best regards,") || line.toLowerCase().startsWith("kind regards,")) {
+        y += 4;
+      }
+      
+      y = drawRichParagraphForPdf(
+        doc,
+        line,
+        marginX,
+        y,
+        contentWidth,
+        pColor,
+        10,
+        5,
+        checkPageBreak
+      ) + 2;
+    }
+  }
+
+  const totalPages = doc.internal.pages.length - 1;
+  for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+    doc.setPage(pageNum);
+    doc.setFont("helvetica", "italic");
+    doc.setFontSize(8);
+    doc.setTextColor(128, 128, 128); // Gray Comments
+    doc.text("Powered by ProdixAI Systems", marginX, 287);
+    doc.text(`Page ${pageNum} of ${totalPages}`, pageWidth - marginX, 287, { align: "right" });
+  }
+
+  const pdfOutput = doc.output("blob");
+  let wordsList = cleanAndShortenDocTitle(cleanTitle).split("_");
+  if (wordsList.length === 0 || !wordsList[0]) wordsList = ["Document"];
+  const formattedFileName = wordsList.join("_");
+  const fileNameWithExt = `${formattedFileName}.pdf`;
+
+  await downloadFile(pdfOutput, fileNameWithExt);
 }

@@ -25,6 +25,8 @@ import {
 import { ChatSession } from "../types";
 import { format } from "date-fns";
 import { cn } from "../lib/utils";
+// @ts-ignore
+import maryBg from "../assets/images/mary_bg_1780090994680.png";
 
 interface ChatListProps {
   sessions: ChatSession[];
@@ -160,6 +162,15 @@ export function ChatList({
 
   return (
     <div className="flex flex-col h-full wa-doodle-bg w-full max-w-3xl mx-auto sm:border-x sm:border-wa-divider shadow-2xl relative overflow-hidden">
+      {/* Background image watermark of Mary */}
+      <div className="absolute inset-0 pointer-events-none overflow-hidden select-none z-0">
+        <img 
+          src={maryBg} 
+          alt="Mary Background" 
+          className="w-full h-full object-cover opacity-[0.14] dark:opacity-[0.08] filter saturate-[0.8]" 
+          referrerPolicy="no-referrer"
+        />
+      </div>
       
       {/* App Bar / Header */}
       <div className="header-anim px-4 pt-4 pb-3 flex items-center justify-between shadow-sm z-10 shrink-0">

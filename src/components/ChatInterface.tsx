@@ -1,13 +1,15 @@
 import React, { useState, useRef, useEffect } from "react";
-import { ArrowLeft, MoreVertical, Phone, Video, Paperclip, Send, Camera as CameraIcon, Mic, Check, CheckCheck, Bot, X, Plus, Download, Trash2, FileText } from "lucide-react";
+import { ArrowLeft, MoreVertical, Phone, Video, Paperclip, Send, Camera as CameraIcon, Mic, Check, CheckCheck, Bot, X, Plus, Download, Trash2, FileText, Copy } from "lucide-react";
 import { ChatMessage, Attachment, ChatSession } from "../types";
-import { cn, fileToBase64 } from "../lib/utils";
-import { generateProfessionalDoc } from "../lib/documentGenerator";
+import { cn, fileToBase64, compressImageBase64 } from "../lib/utils";
+import { generateProfessionalDoc, generateProfessionalPdf } from "../lib/documentGenerator";
 import { format } from "date-fns";
 import { AttachmentMenu } from "./AttachmentMenu";
 import { sendMessageToAI } from "../api";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { motion, AnimatePresence } from "motion/react";
+// @ts-ignore
+import jesusBg from "../assets/images/jesus_bg_1780090976786.png";
 
 // Helper to sanitize & extract extremely concise and humanized document names to prevent word-wrapping/overflows and download issues on mobile
 function cleanAndShortenDocTitle(rawTitle: string): string {
@@ -89,9 +91,17 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
         const parsed = JSON.parse(saved);
         return parsed.map((m: any) => {
           const date = m.timestamp ? new Date(m.timestamp) : new Date();
+          let attachment = m.attachment;
+          if (attachment && attachment.base64 && (!attachment.url || attachment.url.startsWith("blob:"))) {
+            attachment = {
+              ...attachment,
+              url: `data:${attachment.type};base64,${attachment.base64}`
+            };
+          }
           return {
             ...m,
-            timestamp: !isNaN(date.getTime()) ? date : new Date()
+            timestamp: !isNaN(date.getTime()) ? date : new Date(),
+            attachment
           };
         });
       } catch (e) {}
@@ -112,6 +122,7 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
   const [activeModelLabel, setActiveModelLabel] = useState<string>("Prodix-Pro");
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isDownloadingDoc, setIsDownloadingDoc] = useState(false);
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   
   // Document Parsing and RAG states
   const [isParsingDoc, setIsParsingDoc] = useState(false);
@@ -334,13 +345,17 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
     return null;
   };
 
-  const handleDownloadDoc = async (title: string, rawText: string, docType: "letter" | "report" | "general", fullDocText?: string) => {
+  const handleDownloadDoc = async (title: string, rawText: string, docType: "letter" | "report" | "general", format: "docx" | "pdf", fullDocText?: string) => {
     try {
       setIsDownloadingDoc(true);
       const textToUse = fullDocText || rawText;
-      await generateProfessionalDoc(title, textToUse, docType);
+      if (format === "pdf") {
+        await generateProfessionalPdf(title, textToUse, docType);
+      } else {
+        await generateProfessionalDoc(title, textToUse, docType);
+      }
     } catch (err) {
-      console.error("Failed to generate document", err);
+      console.error(`Failed to generate ${format} document`, err);
     } finally {
       setIsDownloadingDoc(false);
     }
@@ -361,18 +376,10 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
 
   useEffect(() => {
     if (!session.isTemporary) {
-      // Strip out huge base64 payloads to prevent QuotaExceededError crashes with localStorage
-      const cleanedMessages = messages.map(msg => {
-        if (msg.attachment && msg.attachment.base64) {
-          const { base64, ...rest } = msg.attachment;
-          return { ...msg, attachment: rest };
-        }
-        return msg;
-      });
       try {
-        localStorage.setItem(`prodixai-messages-${session.id}`, JSON.stringify(cleanedMessages));
+        localStorage.setItem(`prodixai-messages-${session.id}`, JSON.stringify(messages));
       } catch (err) {
-        console.error("Failed to save messages to localStorage (quota exceeded):", err);
+        console.error("Failed to save messages to localStorage:", err);
       }
     }
   }, [messages, session.id, session.isTemporary]);
@@ -409,12 +416,21 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
     let newAttachment: Attachment | undefined = undefined;
     if (navFile) {
       try {
-        const base64 = await fileToBase64(navFile);
+        let base64 = "";
+        let finalUrl = "";
+        if (navFile.type.startsWith("image/")) {
+          base64 = await compressImageBase64(navFile, 600, 600, 0.75);
+          finalUrl = `data:${navFile.type};base64,${base64}`;
+        } else {
+          base64 = await fileToBase64(navFile);
+          finalUrl = URL.createObjectURL(navFile);
+        }
+
         newAttachment = {
           name: navFile.name,
           type: navFile.type,
           base64: base64,
-          url: URL.createObjectURL(navFile)
+          url: finalUrl
         };
       } catch (e) {
         console.error("Failed to read file", e);
@@ -608,7 +624,17 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
 
       {/* Chat Area */}
       <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-2 bg-transparent relative">
-        <div className="flex justify-center mb-4">
+        {/* Background image watermark of Jesus */}
+        <div className="absolute inset-0 pointer-events-none overflow-hidden select-none z-0">
+          <img 
+            src={jesusBg} 
+            alt="Jesus Background" 
+            className="w-full h-full object-cover opacity-[0.14] dark:opacity-[0.08] filter saturate-[0.8]" 
+            referrerPolicy="no-referrer"
+          />
+        </div>
+        
+        <div className="flex justify-center mb-4 z-10">
           <div className="bg-wa-panel text-wa-text-muted text-xs px-3 py-1.5 rounded-lg shadow-sm">
             Ukora gake bikajyenda cyane by <span className="text-[#00a884] font-bold">Kevin</span>
           </div>
@@ -735,7 +761,24 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
                       </div>
                     )}
                     
-                    <div className="flex items-center gap-1 shrink-0 ml-auto self-end float-right leading-none mt-1">
+                    <div className="flex items-center gap-1.5 shrink-0 ml-auto self-end float-right leading-none mt-1 select-none">
+                      <button
+                        onClick={() => {
+                          const textToCopy = msg.fullDocText || msg.text;
+                          navigator.clipboard.writeText(textToCopy);
+                          setCopiedMessageId(msg.id);
+                          setTimeout(() => setCopiedMessageId(null), 2000);
+                        }}
+                        className="p-1 hover:bg-black/10 dark:hover:bg-white/10 active:scale-95 rounded-full transition-all cursor-pointer text-wa-text-muted hover:text-wa-text flex items-center justify-center shrink-0 border-none bg-transparent opacity-60 hover:opacity-100"
+                        title="Copy message text"
+                      >
+                        {copiedMessageId === msg.id ? (
+                          <Check className="w-[12px] h-[12px] text-green-500 font-bold" />
+                        ) : (
+                          <Copy className="w-[12px] h-[12px]" />
+                        )}
+                      </button>
+                      
                       <span className="text-[11px] text-wa-text-muted opacity-80">
                         {(() => {
                           const date = msg.timestamp;
@@ -753,30 +796,40 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
                     </div>
                   </div>
 
-                  {/* Word Document Generation Button */}
+                  {/* Word and PDF Document Generation Buttons */}
                   {docInfo && (
-                    <div className="mt-2.5 pt-2.5 border-t border-black/10 dark:border-white/10 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                    <div className="mt-2.5 pt-2.5 border-t border-black/10 dark:border-white/10 flex flex-col gap-3">
                       <div className="flex items-center gap-2">
                         <div className="w-9 h-9 rounded bg-[#1f5fbf]/10 flex items-center justify-center shrink-0 border border-[#1f5fbf]/20">
                           <span className="text-[14px] font-black text-[#1f5fbf]">W</span>
                         </div>
                         <div className="flex flex-col min-w-0">
-                          <span className="text-[13px] font-semibold text-wa-text truncate max-w-[150px] sm:max-w-[200px]" title={docInfo.title}>
+                          <span className="text-[13px] font-semibold text-wa-text truncate max-w-[180px] sm:max-w-[240px]" title={docInfo.title}>
                             {docInfo.title}
                           </span>
                           <span className="text-[11px] text-wa-text-muted capitalize">
-                            {docInfo.type} (.docx)
+                            {docInfo.type} (.docx / .pdf)
                           </span>
                         </div>
                       </div>
-                      <button
-                        onClick={() => handleDownloadDoc(docInfo.title, msg.text, docInfo.type, msg.fullDocText)}
-                        disabled={isDownloadingDoc}
-                        className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-[#00a884] hover:bg-[#008f72] active:scale-[0.98] disabled:opacity-50 transition-all text-white rounded font-medium text-[12px] self-start sm:self-center cursor-pointer shadow-sm border-none"
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                        Download document
-                      </button>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          onClick={() => handleDownloadDoc(docInfo.title, msg.text, docInfo.type, "docx", msg.fullDocText)}
+                          disabled={isDownloadingDoc}
+                          className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[#1f5fbf] hover:bg-[#164c9c] active:scale-[0.98] disabled:opacity-50 transition-all text-white rounded font-medium text-[12px] cursor-pointer shadow-sm border-none grow sm:grow-0"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          Word (.DOCX)
+                        </button>
+                        <button
+                          onClick={() => handleDownloadDoc(docInfo.title, msg.text, docInfo.type, "pdf", msg.fullDocText)}
+                          disabled={isDownloadingDoc}
+                          className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[#df2c2c] hover:bg-[#be2121] active:scale-[0.98] disabled:opacity-50 transition-all text-white rounded font-medium text-[12px] cursor-pointer shadow-sm border-none grow sm:grow-0"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          PDF (.PDF)
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -786,30 +839,24 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
         })}
         {isLoading && (
            <div className="flex justify-start">
-              <div className="bg-wa-bubble-in rounded-lg rounded-tl-none px-4 py-3 text-wa-text text-[15px] shadow-sm flex items-center gap-2">
-                 <div className="flex items-center gap-3">
-                   <div className="relative w-5 h-5 flex items-center justify-center shrink-0">
-                     {/* Outer rotating orbit container */}
-                     <div className="absolute inset-0 animate-spin" style={{ animationDuration: '1.6s' }}>
-                       {/* Orbit Dot 1 - Cyan */}
-                       <span className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-1.5 h-1.5 bg-cyan-400 rounded-full shadow-[0_0_6px_#22d3ee]"></span>
-                       {/* Orbit Dot 2 - Fuchsia */}
-                       <span className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 w-1.5 h-1.5 bg-fuchsia-400 rounded-full shadow-[0_0_6px_#e879f9]"></span>
-                       {/* Orbit Dot 3 - Blue */}
-                       <span className="absolute left-0 top-1/2 -translate-x-1/2 -translate-y-1/2 w-1.5 h-1.5 bg-blue-400 rounded-full shadow-[0_0_6px_#60a5fa]"></span>
-                       {/* Orbit Dot 4 - Emerald */}
-                       <span className="absolute right-0 top-1/2 translate-x-1/2 -translate-y-1/2 w-1.5 h-1.5 bg-emerald-400 rounded-full shadow-[0_0_6px_#34d399]"></span>
-                       
-                       {/* Light circular stroke trail */}
-                       <div className="absolute inset-0.5 rounded-full border border-white/10"></div>
-                     </div>
-                     {/* Center core pulse */}
-                     <div className="w-1.5 h-1.5 rounded-full bg-indigo-400/60 animate-pulse"></div>
+              <div className="bg-wa-bubble-in rounded-lg rounded-tl-none px-3.5 py-3 shadow-sm flex items-center justify-center">
+                 <div className="relative w-3.5 h-3.5 flex items-center justify-center shrink-0">
+                   {/* Outer rotating orbit container */}
+                   <div className="absolute inset-0 animate-spin" style={{ animationDuration: '1.6s' }}>
+                     {/* Orbit Dot 1 - Cyan */}
+                     <span className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-1 h-1 bg-cyan-400 rounded-full shadow-[0_0_4px_#22d3ee]"></span>
+                     {/* Orbit Dot 2 - Fuchsia */}
+                     <span className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 w-1 h-1 bg-fuchsia-400 rounded-full shadow-[0_0_4px_#e879f9]"></span>
+                     {/* Orbit Dot 3 - Blue */}
+                     <span className="absolute left-0 top-1/2 -translate-x-1/2 -translate-y-1/2 w-1 h-1 bg-blue-400 rounded-full shadow-[0_0_4px_#60a5fa]"></span>
+                     {/* Orbit Dot 4 - Emerald */}
+                     <span className="absolute right-0 top-1/2 translate-x-1/2 -translate-y-1/2 w-1 h-1 bg-emerald-400 rounded-full shadow-[0_0_4px_#34d399]"></span>
+                     
+                     {/* Light circular stroke trail */}
+                     <div className="absolute inset-x-0.5 inset-y-0.5 rounded-full border border-white/10"></div>
                    </div>
-                   
-                   <span className="text-[13.5px] font-medium text-wa-text-muted animate-pulse">
-                     {customLoadingText || "ProdixAI iri gutekereza..."}
-                   </span>
+                   {/* Center core pulse */}
+                   <div className="w-1 h-1 rounded-full bg-indigo-400/60 animate-pulse"></div>
                  </div>
               </div>
            </div>
