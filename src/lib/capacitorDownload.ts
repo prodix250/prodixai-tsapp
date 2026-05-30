@@ -1,4 +1,5 @@
 import { Filesystem, Directory } from "@capacitor/filesystem";
+import { Toast } from "@capacitor/toast";
 import { Capacitor } from "@capacitor/core";
 
 // Helper to convert a Blob to base64 (with option to strip the data-url prefix)
@@ -6,12 +7,20 @@ function blobToBase64(blob: Blob, stripPrefix = true): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onloadend = () => {
-      const result = reader.result as string;
-      if (stripPrefix) {
-        const base64String = result.substring(result.indexOf(",") + 1);
-        resolve(base64String);
-      } else {
-        resolve(result);
+      try {
+        const result = reader.result as string;
+        if (stripPrefix) {
+          const commaIndex = result.indexOf(",");
+          if (commaIndex !== -1) {
+            resolve(result.substring(commaIndex + 1));
+          } else {
+            resolve(result);
+          }
+        } else {
+          resolve(result);
+        }
+      } catch (err) {
+        reject(err);
       }
     };
     reader.onerror = () => {
@@ -32,17 +41,20 @@ export async function downloadFile(urlOrBlob: string | Blob, fileName: string): 
     const isAndroid = Capacitor.isNativePlatform();
 
     if (isAndroid) {
-      console.log(`[CapacitorDownload] Initiating native download/share for: ${fileName}`);
+      console.log(`[CapacitorDownload] Initiating native download for: ${fileName}`);
       let base64Data = "";
 
+      // Convert or fetch binary data to Base64
       if (urlOrBlob instanceof Blob) {
-        // Handle direct Blob injection (e.g. DOCX generated client-side)
         base64Data = await blobToBase64(urlOrBlob, true);
       } else if (typeof urlOrBlob === "string" && urlOrBlob.startsWith("data:")) {
-        // Handle Base64 Data URLs (e.g. canvases)
-        base64Data = urlOrBlob.substring(urlOrBlob.indexOf(",") + 1);
+        const commaIndex = urlOrBlob.indexOf(",");
+        if (commaIndex !== -1) {
+          base64Data = urlOrBlob.substring(commaIndex + 1);
+        } else {
+          base64Data = urlOrBlob;
+        }
       } else if (typeof urlOrBlob === "string") {
-        // Handle remote image or file URL
         console.log(`[CapacitorDownload] Fetching remote file: ${urlOrBlob}`);
         const response = await fetch(urlOrBlob);
         if (!response.ok) {
@@ -54,17 +66,18 @@ export async function downloadFile(urlOrBlob: string | Blob, fileName: string): 
         throw new Error("Invalid input format for downloadFile");
       }
 
-      // 1. Check and request permissions if needed
+      // Request permissions
       try {
-        const permStatus = await Filesystem.checkPermissions();
+        console.log("[CapacitorDownload] Requesting write permissions");
+        const permStatus = await Filesystem.requestPermissions();
         if (permStatus.publicStorage !== "granted") {
-          await Filesystem.requestPermissions();
+          console.warn("[CapacitorDownload] Storage write permissions not granted");
         }
-      } catch (permErr) {
-        console.warn("[CapacitorDownload] Failed to check/request permissions:", permErr);
+      } catch (permErr: any) {
+        console.warn("[CapacitorDownload] Failed to request permissions:", permErr);
       }
 
-      // 2. Write the base64 content directly to the Directory.Documents folder
+      // Save to Directory.Documents
       const writeResult = await Filesystem.writeFile({
         path: fileName,
         data: base64Data,
@@ -72,10 +85,13 @@ export async function downloadFile(urlOrBlob: string | Blob, fileName: string): 
         recursive: true,
       });
 
-      console.log(`[CapacitorDownload] File successfully saved to local URI in Documents: ${writeResult.uri}`);
+      console.log(`[CapacitorDownload] File successfully saved to local URI: ${writeResult.uri}`);
 
-      // 3. Inform the user with a simple alert as explicitly requested
-      alert("File saved to Documents folder");
+      // Show native success toast (NEVER alert)
+      await Toast.show({
+        text: `Saved: ${fileName} in Documents`,
+        duration: "long",
+      });
 
       return true;
     } else {
@@ -90,7 +106,6 @@ export async function downloadFile(urlOrBlob: string | Blob, fileName: string): 
         document.body.appendChild(a);
         a.click();
         
-        // Clean up memory
         setTimeout(() => {
           document.body.removeChild(a);
           URL.revokeObjectURL(url);
@@ -109,12 +124,23 @@ export async function downloadFile(urlOrBlob: string | Blob, fileName: string): 
       }
       return true;
     }
-  } catch (error) {
-    console.error("[CapacitorDownload] Error performing file save/share:", error);
-    
-    // Final emergency fallback if the Capacitor code threw an error but we're on mobile webview
+  } catch (error: any) {
+    const errorMsg = error?.message || String(error) || "Unknown error occurred";
+    console.error("[CapacitorDownload] Error performing file save:", error);
+
+    // Show native error toast (NEVER alert)
     try {
-      if (typeof urlOrBlob === "string") {
+      await Toast.show({
+        text: `Download Failed: ${errorMsg}`,
+        duration: "long",
+      });
+    } catch (toastErr) {
+      console.error("[CapacitorDownload] Toast display failed:", toastErr);
+    }
+    
+    // Web emergency fallback if on android browser but capacitor native failed
+    try {
+      if (typeof urlOrBlob === "string" && !urlOrBlob.startsWith("data:")) {
         const a = document.createElement("a");
         a.href = urlOrBlob;
         a.download = fileName;

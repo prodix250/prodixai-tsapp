@@ -33,68 +33,168 @@ const maskKey = (key: string): string => {
   return `${key.substring(0, 8)}...${key.slice(-4)}`;
 };
 
-// Reliable dynamic retrieval of GEMINI_API_KEY from environment variables only
+// Reliable dynamic retrieval of GEMINI_API_KEY from environment variables only (supports multiple keys separated by commas/spaces or individual numbered variables)
 const getApiKeys = (): string[] => {
-  const key = process.env.GEMINI_API_KEY;
-  return key ? [key] : [];
-};
-
-app.post("/api/chat", async (req, res) => {
-  try {
-    const { history, message, file, documentContext, documentName } = req.body;
-    const currentApiKeys = getApiKeys();
-
-    // Format history messages into Content objects
-    const contents: Content[] = (history || []).map((msg: any) => ({
-      role: msg.role === "user" ? "user" : "model",
-      parts: [{ text: msg.text || "" }]
-    }));
-
-    // Build the parts for the new user message
-    const newParts: Part[] = [];
-    if (file && file.base64 && file.type) {
-      const isNativelySupported = 
-        file.type.startsWith("image/") || 
-        file.type === "application/pdf" || 
-        file.type === "text/plain";
-        
-      if (isNativelySupported) {
-        newParts.push({
-          inlineData: {
-            data: file.base64,
-            mimeType: file.type
-          }
-        });
+  const keysList: string[] = [];
+  
+  // 1. Explicit rotated keys in order (1, 2, 3, 4)
+  const explicitRotated = [
+    process.env.GEMINI_API_KEY_1,
+    process.env.GEMINI_API_KEY_2,
+    process.env.GEMINI_API_KEY_3,
+    process.env.GEMINI_API_KEY_4
+  ].map(k => k?.trim()).filter(Boolean) as string[];
+  
+  keysList.push(...explicitRotated);
+  
+  // 2. Generic GEMINI_API_KEY if present and not already registered (supporting both comma/space-separated and single)
+  const defaultKeys = process.env.GEMINI_API_KEY;
+  if (defaultKeys) {
+    const splitDefault = defaultKeys.split(/[\s,;]+/).map(k => k.trim()).filter(Boolean);
+    for (const k of splitDefault) {
+      if (!keysList.includes(k)) {
+        keysList.push(k);
       }
     }
-    newParts.push({ text: message || "" });
+  }
+  
+  return keysList;
+};
 
-    contents.push({ role: "user", parts: newParts });
+interface GeminiResponseResult {
+  text: string;
+  modelLabel: string;
+}
 
-    const modelsToTry = [
-      { name: "gemini-3.5-flash", label: "ProdixAI (Speed-Flash)" },
-      { name: "gemini-3.1-flash-lite", label: "ProdixAI (Ultra-Lite)" }
-    ];
+// Robust API call wrapper that automatically rotates through available API keys upon hitting 429/quota limits
+async function getGeminiResponse(
+  contents: Content[],
+  documentContext?: string,
+  documentName?: string
+): Promise<GeminiResponseResult> {
+  const currentApiKeys = getApiKeys();
+  if (currentApiKeys.length === 0) {
+    throw new Error("NO_KEYS_CONFIGURED");
+  }
 
-    let lastError: any = null;
-    let successResponse: string | null = null;
-    let usedModelLabel = "";
+  const modelsToTry = [
+    { name: "gemini-3.5-flash", label: "ProdixAI (Speed-Flash)" },
+    { name: "gemini-3.1-flash-lite", label: "ProdixAI (Ultra-Lite)" },
+    { name: "gemini-3.1-pro-preview", label: "ProdixAI (Premium-Pro)" }
+  ];
 
-    // Try API keys
-    for (const currentApiKey of currentApiKeys) {
-      const ai = new GoogleGenAI({
-        apiKey: currentApiKey,
-      });
+  let lastError: any = null;
+  let keyIndex = 0;
 
-      let apiKeyFailed = false;
+  // Automically rotate through keys in our array if a 429 is caught
+  while (keyIndex < currentApiKeys.length) {
+    const currentApiKey = currentApiKeys[keyIndex];
+    console.log(`[ProdixAI Key Pool] Attempting request using API key index ${keyIndex} [${maskKey(currentApiKey)}]`);
 
-      for (const modelInfo of modelsToTry) {
+    const ai = new GoogleGenAI({
+      apiKey: currentApiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build'
+        }
+      }
+    });
+
+    let currentKeyHas429 = false;
+
+    for (const modelInfo of modelsToTry) {
+      if (currentKeyHas429) {
+        // If this key received a 429, skip remainder models and rotate key immediately
+        break;
+      }
+
+      // Step 1: Attempt with Google Search grounding enabled
+      try {
+        console.log(`[ProdixAI API] Trying model ${modelInfo.name} with Google Search and Key Index ${keyIndex}...`);
+        const response = await ai.models.generateContent({
+          model: modelInfo.name,
+          contents,
+          config: {
+            systemInstruction: getSystemInstruction(documentContext, documentName),
+            thinkingConfig: modelInfo.name === "gemini-3.1-pro-preview" ? undefined : {
+              thinkingLevel: ThinkingLevel.MINIMAL
+            },
+            tools: [{ googleSearch: {} }] // Enabled for each key
+          }
+        });
+
+        if (response && response.text) {
+          console.log(`[ProdixAI API Success] Successfully loaded response using model ${modelInfo.name} + Google Search (Key ID: ${keyIndex})`);
+          return {
+            text: response.text,
+            modelLabel: `${modelInfo.label} (Google Search)`
+          };
+        }
+      } catch (error: any) {
+        lastError = error;
+        const errStr = typeof error === 'object' && error !== null 
+          ? JSON.stringify(error) + " " + String(error.message || "") + " " + String(error.status || "") 
+          : String(error);
+
+        console.warn(`[Key Loop Error] Attempt failed for model ${modelInfo.name} using Key Index ${keyIndex} with Google Search. Error: ${error.message || error}`);
+
+        // DO NOT break immediately on 429 here! Try fallback without search first,
+        // because search grounding might have reached its query quota/rate limit 
+        // while the underlying key remains active for standard text generations.
+
+        // Step 2: Fallback WITHOUT Google Search grounding for the same model if Google Search was blocked / lacks grounding quota
         try {
-          const response = await ai.models.generateContent({
+          console.log(`[ProdixAI API Fallback] Trying model ${modelInfo.name} without search grounding (Key ID: ${keyIndex})...`);
+          const responseNoSearch = await ai.models.generateContent({
             model: modelInfo.name,
             contents,
             config: {
-              systemInstruction: `You are ProdixAI, an intelligent and thoughtful AI designed by Uwumukiza Kevin.
+              systemInstruction: getSystemInstruction(documentContext, documentName),
+              thinkingConfig: modelInfo.name === "gemini-3.1-pro-preview" ? undefined : {
+                thinkingLevel: ThinkingLevel.MINIMAL
+              }
+            }
+          });
+
+          if (responseNoSearch && responseNoSearch.text) {
+            console.log(`[ProdixAI API Success] Successfully loaded fallback response using model ${modelInfo.name} (Key ID: ${keyIndex})`);
+            return {
+              text: responseNoSearch.text,
+              modelLabel: `${modelInfo.label}`
+            };
+          }
+        } catch (fallbackErr: any) {
+          lastError = fallbackErr;
+          const fallbackErrStr = typeof fallbackErr === 'object' && fallbackErr !== null 
+            ? JSON.stringify(fallbackErr) + " " + String(fallbackErr.message || "") + " " + String(fallbackErr.status || "") 
+            : String(fallbackErr);
+
+          console.warn(`[Key Loop Error] Fallback attempt without Google Search also failed for model ${modelInfo.name} using Key Index ${keyIndex}. Error: ${fallbackErr.message || fallbackErr}`);
+
+          const isFallback429 = fallbackErrStr.toLowerCase().includes("quota") || 
+                                fallbackErrStr.toLowerCase().includes("limit") || 
+                                fallbackErrStr.toLowerCase().includes("resource_exhausted") || 
+                                fallbackErrStr.toLowerCase().includes("429");
+
+          if (isFallback429) {
+            console.log(`[ProdixAI Auto-Failover] True 429 Rate Limit/Quota Exhaustion detected in fallback on Key Index ${keyIndex}. Switching key...`);
+            currentKeyHas429 = true;
+            break; // Exit models loop to immediately retry with next API key in the pool
+          }
+        }
+      }
+    }
+
+    // Try next key if current key was exhausted
+    keyIndex++;
+  }
+
+  // All keys are exhausted
+  throw lastError || new Error("ALL_KEYS_EXHAUSTED");
+}
+
+function getSystemInstruction(documentContext?: string, documentName?: string): string {
+  return `Today's date and current time is ${new Date().toString()}. You are ProdixAI, created by Kevin. Always provide accurate information, date, and time based on this current timestamp. You have access to Google Search. Use it whenever the user asks about current events or something that requires up-to-date knowledge.
 IDENTITY:
 You must always know and state clearly that you were designed by Uwumukiza Kevin when asked.
 You represent a smart, honest, and slightly challenging assistant that values truth over pleasing people.
@@ -182,40 +282,54 @@ When requested, you MUST:
 1. Provide a comprehensive, formal, and authoritative content response using rich, perfectly structured markdown in the chat first.
 2. Structure your response with a clear Heading 1 at the very top (e.g. "# Official Report: [Subject]" or "# Reference Letter for [Person]") so that the UI can detect the subject and use it for the file name.
 3. Use structured subheadings (e.g. "## Introduction", "## Conclusion") and clean lists where appropriate.
-4. For formal letters, structure them with standard blocks: Senders details, Date, Recipient address, a prominent subject line (e.g., "Impamvu: ..."), clean salutation, clear body paragraphs, and a formal sign-off (e.g., "Sincerely,", "Sincerely yours,", "Wanyu guhemuka,"). Ensure signature space is placed logically.
+4. For formal letters, structure them with standard blocks: Senders details, Date, Recipient address, a prominent subject line (e.g., "Impamvu: ..."), clean salutation, create body paragraphs, and a formal sign-off (e.g., "Sincerely,", "Sincerely yours,", "Wanyu guhemuka,"). Ensure signature space is placed logically.
 5. NO ASCII ART OR BOX LINES: You are STRICTLY FORBIDDEN from generating tables, cell grids, diagrams, flowcharts, or shapes using ASCII characters (such as +, -, |, x, =).
 6. NATIVE MARKDOWN TABLES FOR STRUCTURED DATA: When presenting structured tables, use standard markdown pipe table format (| Header 1 | Header 2 |) cleanly and normally. Do not surround them with ASCII borders or box drawings.
 7. DIAGRAMS TO TABLES: If a flowchart, diagram, process map, or step-by-step pipeline is requested, convert and represent it as a beautifully structured markdown table detailing the Step, Description, and Outcome instead of trying to draw shapes or lines with connectors.
-8. NO EXTRA CONVERSATIONAL TEXT: You are STRICTLY FORBIDDEN from writing any other conversational sentences, friendly chat, helper text, explanations, or setups before or after the document itself (such as "Sure, here is your document...", "Hano hari imeyili cyangwa ibaruwa...", "Hope this helps!", etc.). The entire response output MUST ONLY consist of the document's structured markdown itself. Starting with the high-level markdown headers or letter coordinates, and ending with the signature box.`,
-              thinkingConfig: {
-                thinkingLevel: ThinkingLevel.MINIMAL
-              }
-            }
-          });
+8. NO EXTRA CONVERSATIONAL TEXT: You are STRICTLY FORBIDDEN from writing any other conversational sentences, friendly chat, helper text, explanations, or setups before or after the document itself (such as "Sure, here is your document...", "Hano hari imeyili cyangwa ibaruwa...", "Hope this helps!", etc.). The entire response output MUST ONLY consist of the document's structured markdown itself. Starting with the high-level markdown headers or letter coordinates, and ending with the signature box.`;
+}
 
-          if (response && response.text) {
-            successResponse = response.text;
-            usedModelLabel = modelInfo.label;
-            break; // Success! Exit model loop
+app.post("/api/chat", async (req, res) => {
+  try {
+    const { history, message, file, documentContext, documentName } = req.body;
+    const currentApiKeys = getApiKeys();
+
+    // Format history messages into Content objects
+    const contents: Content[] = (history || []).map((msg: any) => ({
+      role: msg.role === "user" ? "user" : "model",
+      parts: [{ text: msg.text || "" }]
+    }));
+
+    // Build the parts for the new user message
+    const newParts: Part[] = [];
+    if (file && file.base64 && file.type) {
+      const isNativelySupported = 
+        file.type.startsWith("image/") || 
+        file.type === "application/pdf" || 
+        file.type === "text/plain";
+        
+      if (isNativelySupported) {
+        newParts.push({
+          inlineData: {
+            data: file.base64,
+            mimeType: file.type
           }
-        } catch (error: any) {
-          console.warn(`[Key Fallback Alert] Tried ${modelInfo.name} with key [${maskKey(currentApiKey)}] but got error: ${error.message || error}`);
-          lastError = error;
-        }
-      }
-
-      if (successResponse !== null) {
-        break; // Success! Exit key loop
+        });
       }
     }
+    newParts.push({ text: message || "" });
 
-    if (successResponse !== null) {
-      res.json({ text: successResponse, modelLabel: usedModelLabel });
-    } else {
+    contents.push({ role: "user", parts: newParts });
+
+    try {
+      // Call our robust API Key rotation function
+      const result = await getGeminiResponse(contents, documentContext, documentName);
+      res.json({ text: result.text, modelLabel: result.modelLabel });
+    } catch (lastError: any) {
       let errorMessage = "PRODIX AI is busy, please try again in a moment.";
       if (currentApiKeys.length === 0) {
-        errorMessage = "PRODIX API Key is not configured. Please add GEMINI_API_KEY in the Settings -> Secrets panel or configure it in your .env file.";
-      } else if (lastError) {
+        errorMessage = "PRODIX API Key is not configured. Please add GEMINI_API_KEY_1, GEMINI_API_KEY_2, GEMINI_API_KEY_3, or GEMINI_API_KEY_4 in the Settings -> Secrets panel.";
+      } else {
         let errStr = "";
         try {
           errStr = (String(lastError.message || "") + " " + String(lastError.stack || "") + " " + JSON.stringify(lastError)).toLowerCase();
@@ -224,9 +338,22 @@ When requested, you MUST:
         }
         const attemptedKeysList = currentApiKeys.map(maskKey).join(", ");
         if (errStr.includes("api key") || errStr.includes("api_key") || errStr.includes("expired") || errStr.includes("invalid") || errStr.includes("unauthorized") || errStr.includes("not valid")) {
-          errorMessage = `PRODIX API Key is expired, invalid, or needs renewal. Please renew your GEMINI_API_KEY in the Settings -> Secrets panel in Google AI Studio. (Attempted keys: ${attemptedKeysList})`;
+          errorMessage = `PRODIX API Keys are expired, invalid, or need renewal. Please renew your rotating GEMINI_API_KEYs (GEMINI_API_KEY_1, _2, _3, _4) in the Settings -> Secrets panel in Google AI Studio. (Attempted keys: ${attemptedKeysList})`;
         } else if (errStr.includes("quota") || errStr.includes("limit") || errStr.includes("resource_exhausted") || errStr.includes("429")) {
-          errorMessage = "Muri kano kanya umubare w'ibibazo byemewe ku munsi (Quota Limit) ku mfashanyigisho rusange wuzuye (429 Rate Limit).\nKugira ngo ukomeze gukoresha ProdixAI udakumiriwe, shyiramo API Key yawe bwite muri **Settings > Secrets** (injiza izina `GEMINI_API_KEY`) cyangwa utegereze gato!\n\n---\n\nThe shared daily API quota limit has been exceeded (429 Rate Limit).\nTo bypass this limit and continue instantly, please configure your own personal API Key under **Settings > Secrets** (add variable name `GEMINI_API_KEY`) in AI Studio.";
+          errorMessage = `Muri kano kanya umubare w'ibibazo byemewe ku munsi (Quota Limit) wuzuye kuri buri API Key (429 Rate Limit kuri zose).
+Urufunguzo (API Keys) rwasuzumwe kuri servers za ProdixAI: ${attemptedKeysList}
+
+Niba warashyizemo API Keys nshya ubu ngubu, kora ibi bikurikira:
+1. Banza urebe neza ko wanditse neza amazina yazo nk'uko byanditswe: "GEMINI_API_KEY_1", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4" muri Settings -> Secrets muri Google AI Studio.
+2. Niba urufunguzo ari urwawe bwite, menya ko "Google Search Grounding" ihitamo ibihamye ishobora kuba yabasabye isanduku (billing account) n'iyo yaba ifite quota isanzwe y'ubuntu.
+3. Turabura isanduku yo gusesengura udufasha dushya kubera 429 quota limits.
+
+---
+
+The rotating API key pool quota/rate limit has been fully exceeded for all configured keys (429 Rate Limit for all tries).
+Attempted API Key(s) currently loaded: ${attemptedKeysList}
+
+If you recently updated or entered new keys in Google AI Studio under Settings > Secrets (with the exact names "GEMINI_API_KEY_1", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4"), make sure they are active and saved. Note that features like Google Search Grounding may consume quota rapidly or require valid billing, which triggers resource exhaustion (429) errors.`;
         } else {
           errorMessage = `Gemini API Error: ${lastError.message || lastError} (Attempted keys: ${attemptedKeysList})`;
         }
