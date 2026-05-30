@@ -982,8 +982,10 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
               <>
                 Powered by <span className="text-green-600 dark:text-green-400 font-extrabold text-[11px] tracking-wider">KEVIN</span>
               </>
+            ) : activeModelLabel?.includes("Google Search") ? (
+              "Powered by ProdixAI with Search"
             ) : (
-              `Powered by ${activeModelLabel}`
+              "Powered by ProdixAI"
             )}
           </span>
         </div>
