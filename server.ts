@@ -66,6 +66,11 @@ interface GeminiResponseResult {
   modelLabel: string;
 }
 
+// Local in-memory caches to record sub-system and structural limits on a per-key basis.
+// Keeps performance ultra-fast and prevents server from hammering exhausted limits.
+const searchGroundingCooldowns = new Map<string, number>();
+const exhaustedKeyCooldowns = new Map<string, number>();
+
 // Robust API call wrapper that automatically rotates through available API keys upon hitting 429/quota limits
 async function getGeminiResponse(
   contents: Content[],
@@ -77,19 +82,30 @@ async function getGeminiResponse(
     throw new Error("NO_KEYS_CONFIGURED");
   }
 
-  const modelsToTry = [
-    { name: "gemini-3.5-flash", label: "ProdixAI (Speed-Flash)" },
-    { name: "gemini-3.1-flash-lite", label: "ProdixAI (Ultra-Lite)" },
-    { name: "gemini-3.1-pro-preview", label: "ProdixAI (Premium-Pro)" }
-  ];
-
+  const now = Date.now();
   let lastError: any = null;
-  let keyIndex = 0;
 
-  // Automically rotate through keys in our array if a 429 is caught
-  while (keyIndex < currentApiKeys.length) {
-    const currentApiKey = currentApiKeys[keyIndex];
-    console.log(`[ProdixAI Key Pool] Attempting request using API key index ${keyIndex} [${maskKey(currentApiKey)}]`);
+  // Filter keys that are currently not on generic cooldown
+  let activeKeys = currentApiKeys.filter(key => {
+    const cooldownEnd = exhaustedKeyCooldowns.get(key) || 0;
+    return now > cooldownEnd;
+  });
+
+  // If ALL keys are on cooldown, ignore cooldown as a last resort to retry
+  if (activeKeys.length === 0) {
+    activeKeys = currentApiKeys;
+  }
+
+  // Highly optimized cascading per-key fallback pipeline:
+  // 1. gemini-3.5-flash WITH Google Search Grounding (Ideal primary)
+  // 2. gemini-3.1-flash-lite WITH Google Search Grounding (Lightweight search fallback)
+  // 3. gemini-3.5-flash WITHOUT Google Search (Reliable non-search fallback if search limits are exceeded)
+  // 4. gemini-3.1-flash-lite WITHOUT Google Search (Ultra-compliant high-quota free tier fallback)
+  // 5. gemini-flash-latest WITHOUT Google Search (Classic robust legacy fallback)
+  for (let i = 0; i < activeKeys.length; i++) {
+    const currentApiKey = activeKeys[i];
+    const keyIndexInRaw = currentApiKeys.indexOf(currentApiKey);
+    console.log(`[ProdixAI Key Pool] Initiating cascading pipeline on Key Index ${keyIndexInRaw >= 0 ? keyIndexInRaw : i} [${maskKey(currentApiKey)}]`);
 
     const ai = new GoogleGenAI({
       apiKey: currentApiKey,
@@ -100,101 +116,180 @@ async function getGeminiResponse(
       }
     });
 
-    let currentKeyHas429 = false;
+    const sysInstruction = getSystemInstruction(documentContext, documentName);
+    const searchCooldownEnd = searchGroundingCooldowns.get(currentApiKey) || 0;
+    const isSearchDisabled = Date.now() < searchCooldownEnd;
 
-    for (const modelInfo of modelsToTry) {
-      if (currentKeyHas429) {
-        // If this key received a 429, skip remainder models and rotate key immediately
-        break;
-      }
+    if (isSearchDisabled) {
+      console.log(`[ProdixAI Key Pool] Google Search Grounding is temporarily key-cooldowned. Bypassing Search-dependent steps for this key.`);
+    }
 
-      // Step 1: Attempt with Google Search grounding enabled
+    // --- STEP 1: gemini-3.5-flash WITH Google Search Grounding (Ideal Primary) ---
+    if (!isSearchDisabled) {
       try {
-        console.log(`[ProdixAI API] Trying model ${modelInfo.name} with Google Search and Key Index ${keyIndex}...`);
+        console.log(`[ProdixAI API] Trying gemini-3.5-flash with Google Search on Key Index ${i}...`);
         const response = await ai.models.generateContent({
-          model: modelInfo.name,
+          model: "gemini-3.5-flash",
           contents,
           config: {
-            systemInstruction: getSystemInstruction(documentContext, documentName),
-            thinkingConfig: modelInfo.name === "gemini-3.1-pro-preview" ? undefined : {
-              thinkingLevel: ThinkingLevel.MINIMAL
-            },
-            tools: [{ googleSearch: {} }] // Enabled for each key
+            systemInstruction: sysInstruction,
+            tools: [{ googleSearch: {} }]
           }
         });
 
         if (response && response.text) {
-          console.log(`[ProdixAI API Success] Successfully loaded response using model ${modelInfo.name} + Google Search (Key ID: ${keyIndex})`);
+          console.log(`[ProdixAI API Success] Successfully loaded response using model gemini-3.5-flash + Google Search (Key ID: ${i})`);
           return {
             text: response.text,
-            modelLabel: `${modelInfo.label} (Google Search)`
+            modelLabel: "ProdixAI (gemini-3.5-flash + Google Search)"
           };
         }
       } catch (error: any) {
         lastError = error;
-        const errStr = typeof error === 'object' && error !== null 
-          ? JSON.stringify(error) + " " + String(error.message || "") + " " + String(error.status || "") 
-          : String(error);
+        const checkErrStr = (error.message || String(error)).toLowerCase();
+        console.warn(`[Key Loop Error] Google Search failed on gemini-3.5-flash for Key Index ${i}. Error: ${error.message || error}`);
+        
+        // If the API key is invalid/expired, skip tries on this key immediately
+        if (checkErrStr.includes("api key not valid") || 
+            checkErrStr.includes("api_key_invalid") || 
+            checkErrStr.includes("invalid api key") ||
+            checkErrStr.includes("unauthorized") ||
+            checkErrStr.includes("invalid key")) {
+          console.warn(`[ProdixAI Key Pool] Key Index ${i} detected as invalid. Skipping this key completely.`);
+          continue;
+        }
 
-        console.warn(`[Key Loop Error] Attempt failed for model ${modelInfo.name} using Key Index ${keyIndex} with Google Search. Error: ${error.message || error}`);
-
-        // DO NOT break immediately on 429 here! Try fallback without search first,
-        // because search grounding might have reached its query quota/rate limit 
-        // while the underlying key remains active for standard text generations.
-
-        // Step 2: Fallback WITHOUT Google Search grounding for the same model if Google Search was blocked / lacks grounding quota
-        try {
-          console.log(`[ProdixAI API Fallback] Trying model ${modelInfo.name} without search grounding (Key ID: ${keyIndex})...`);
-          const responseNoSearch = await ai.models.generateContent({
-            model: modelInfo.name,
-            contents,
-            config: {
-              systemInstruction: getSystemInstruction(documentContext, documentName),
-              thinkingConfig: modelInfo.name === "gemini-3.1-pro-preview" ? undefined : {
-                thinkingLevel: ThinkingLevel.MINIMAL
-              }
-            }
-          });
-
-          if (responseNoSearch && responseNoSearch.text) {
-            console.log(`[ProdixAI API Success] Successfully loaded fallback response using model ${modelInfo.name} (Key ID: ${keyIndex})`);
-            return {
-              text: responseNoSearch.text,
-              modelLabel: `${modelInfo.label}`
-            };
-          }
-        } catch (fallbackErr: any) {
-          lastError = fallbackErr;
-          const fallbackErrStr = typeof fallbackErr === 'object' && fallbackErr !== null 
-            ? JSON.stringify(fallbackErr) + " " + String(fallbackErr.message || "") + " " + String(fallbackErr.status || "") 
-            : String(fallbackErr);
-
-          console.warn(`[Key Loop Error] Fallback attempt without Google Search also failed for model ${modelInfo.name} using Key Index ${keyIndex}. Error: ${fallbackErr.message || fallbackErr}`);
-
-          const isFallback429 = fallbackErrStr.toLowerCase().includes("quota") || 
-                                fallbackErrStr.toLowerCase().includes("limit") || 
-                                fallbackErrStr.toLowerCase().includes("resource_exhausted") || 
-                                fallbackErrStr.toLowerCase().includes("429");
-
-          if (isFallback429) {
-            console.log(`[ProdixAI Auto-Failover] True 429 Rate Limit/Quota Exhaustion detected in fallback on Key Index ${keyIndex}. Switching key...`);
-            currentKeyHas429 = true;
-            break; // Exit models loop to immediately retry with next API key in the pool
-          }
+        // Search rate/quota limits triggers search cooldown
+        if (checkErrStr.includes("quota") || checkErrStr.includes("limit") || checkErrStr.includes("resource_exhausted") || checkErrStr.includes("429")) {
+          console.warn(`[ProdixAI Key Pool] Google Search Grounding hit quota limits. Cooldown search for 5 minutes.`);
+          searchGroundingCooldowns.set(currentApiKey, Date.now() + 300000);
         }
       }
     }
 
-    // Try next key if current key was exhausted
-    keyIndex++;
+    // --- STEP 2: gemini-3.1-flash-lite WITH Google Search (Faster model search fallback) ---
+    if (!isSearchDisabled && Date.now() >= (searchGroundingCooldowns.get(currentApiKey) || 0)) {
+      try {
+        console.log(`[ProdixAI API] Trying gemini-3.1-flash-lite with Google Search on Key Index ${i}...`);
+        const response = await ai.models.generateContent({
+          model: "gemini-3.1-flash-lite",
+          contents,
+          config: {
+            systemInstruction: sysInstruction,
+            tools: [{ googleSearch: {} }]
+          }
+        });
+
+        if (response && response.text) {
+          console.log(`[ProdixAI API Success] Successfully loaded response using model gemini-3.1-flash-lite + Google Search (Key ID: ${i})`);
+          return {
+            text: response.text,
+            modelLabel: "ProdixAI (gemini-3.1-flash-lite + Google Search)"
+          };
+        }
+      } catch (error: any) {
+        lastError = error;
+        const checkErrStr = (error.message || String(error)).toLowerCase();
+        console.warn(`[Key Loop Error] Google Search failed on gemini-3.1-flash-lite for Key Index ${i}. Error: ${error.message || error}`);
+
+        if (checkErrStr.includes("quota") || checkErrStr.includes("limit") || checkErrStr.includes("resource_exhausted") || checkErrStr.includes("429")) {
+          console.warn(`[ProdixAI Key Pool] Google Search Grounding hit quota limits. Cooldown search for 5 minutes.`);
+          searchGroundingCooldowns.set(currentApiKey, Date.now() + 300000);
+        }
+      }
+    }
+
+    // --- STEP 3: gemini-3.5-flash WITHOUT Google Search (Primary non-search fallback) ---
+    try {
+      console.log(`[ProdixAI API] Falling back to gemini-3.5-flash WITHOUT Google Search on Key Index ${i}...`);
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents,
+        config: {
+          systemInstruction: sysInstruction
+        }
+      });
+
+      if (response && response.text) {
+        console.log(`[ProdixAI API Success] Successfully loaded fallback response using gemini-3.5-flash (Key ID: ${i})`);
+        return {
+          text: response.text,
+          modelLabel: "ProdixAI (gemini-3.5-flash - Search Limit Hit)"
+        };
+      }
+    } catch (error: any) {
+      lastError = error;
+      const checkErrStr = (error.message || String(error)).toLowerCase();
+      console.warn(`[Key Loop Error] Fallback WITHOUT search failed on gemini-3.5-flash for Key Index ${i}. Error: ${error.message || error}`);
+    }
+
+    // --- STEP 4: gemini-3.1-flash-lite WITHOUT Google Search (Highly generous free tier quota fallback) ---
+    try {
+      console.log(`[ProdixAI API] Falling back to gemini-3.1-flash-lite WITHOUT Google Search on Key Index ${i}...`);
+      const response = await ai.models.generateContent({
+        model: "gemini-3.1-flash-lite",
+        contents,
+        config: {
+          systemInstruction: sysInstruction
+        }
+      });
+
+      if (response && response.text) {
+        console.log(`[ProdixAI API Success] Successfully loaded fallback response using gemini-3.1-flash-lite (Key ID: ${i})`);
+        return {
+          text: response.text,
+          modelLabel: "ProdixAI (gemini-3.1-flash-lite - Search Limit Hit)"
+        };
+      }
+    } catch (error: any) {
+      lastError = error;
+      const checkErrStr = (error.message || String(error)).toLowerCase();
+      console.warn(`[Key Loop Error] Fallback WITHOUT search failed on gemini-3.1-flash-lite for Key Index ${i}. Error: ${error.message || error}`);
+    }
+
+    // --- STEP 5: gemini-flash-latest WITHOUT Google Search (Classic robust fallback) ---
+    try {
+      console.log(`[ProdixAI API] Falling back to gemini-flash-latest WITHOUT Google Search on Key Index ${i}...`);
+      const response = await ai.models.generateContent({
+        model: "gemini-flash-latest",
+        contents,
+        config: {
+          systemInstruction: sysInstruction
+        }
+      });
+
+      if (response && response.text) {
+        console.log(`[ProdixAI API Success] Successfully loaded fallback response using gemini-flash-latest (Key ID: ${i})`);
+        return {
+          text: response.text,
+          modelLabel: "ProdixAI (gemini-flash-latest - Search Limit Hit)"
+        };
+      }
+    } catch (error: any) {
+      lastError = error;
+      const checkErrStr = (error.message || String(error)).toLowerCase();
+      console.warn(`[Key Loop Error] Fallback WITHOUT search failed on gemini-flash-latest for Key Index ${i}. Error: ${error.message || error}`);
+
+      // If all fallbacks failed and it is still a general quota rate-limit, cooling down the whole key for 2 minutes is ideal to rotate immediately to other keys.
+      if (checkErrStr.includes("quota") || checkErrStr.includes("limit") || checkErrStr.includes("resource_exhausted") || checkErrStr.includes("429")) {
+        console.warn(`[ProdixAI Key Pool] Key Index ${i} has hit general fallback limit. Cooldown entire key for 2 minutes.`);
+        exhaustedKeyCooldowns.set(currentApiKey, Date.now() + 120000);
+      }
+    }
   }
 
-  // All keys are exhausted
+  // All keys are exhausted in all three cascading pipelines
   throw lastError || new Error("ALL_KEYS_EXHAUSTED");
 }
 
 function getSystemInstruction(documentContext?: string, documentName?: string): string {
-  return `Today's date and current time is ${new Date().toString()}. You are ProdixAI, created by Kevin. Always provide accurate information, date, and time based on this current timestamp. You have access to Google Search. Use it whenever the user asks about current events or something that requires up-to-date knowledge.
+  const kigaliTime = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Africa/Kigali',
+    dateStyle: 'full',
+    timeStyle: 'long'
+  }).format(new Date());
+
+  return `You are a real-time AI. Today is May 30, 2026. For ANY question about sports, news, or current tech, you MUST use your Google Search tool first. Do not rely on your internal training data for current events. If you find news about the 2026 Champions League Final in Budapest today, report it accurately. You are ProdixAI. The current time in Rwanda is ${kigaliTime}. Always respond based on this local time. You were created by Kevin. Always provide accurate information, date, and time based on this current timestamp. You have access to Google Search. Use it whenever the user asks about current events or something that requires up-to-date knowledge.
 IDENTITY:
 You must always know and state clearly that you were designed by Uwumukiza Kevin when asked.
 You represent a smart, honest, and slightly challenging assistant that values truth over pleasing people.
