@@ -22,17 +22,23 @@ export async function sendMessageToAI(
       }
     }
 
-    // Clean history to remove huge base64 payloads of previous files/photos.
+    // Clean history to remove huge base64 payloads of previous files/photos,
+    // and preserve the actual full length of any doc creation messages.
     // The AI only needs the textual messages of the history, not the massive duplicate base64 data!
     const cleanedHistory = (history || []).map((msg: any) => {
+      const actualText = msg.fullDocText || msg.text || "";
       if (msg.attachment && msg.attachment.base64) {
         const { base64, ...rest } = msg.attachment;
         return {
           ...msg,
+          text: actualText,
           attachment: rest
         };
       }
-      return msg;
+      return {
+        ...msg,
+        text: actualText
+      };
     });
 
     const response = await fetch(apiUrl, {

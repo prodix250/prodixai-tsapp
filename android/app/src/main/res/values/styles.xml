@@ -14,7 +14,7 @@
         <item name="android:background">@android:color/white</item>
     </style>
 
-    <!-- Splash Screen Theme -->
+    <!-- Splash Screen Theme (Pre-Android 12) -->
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
         <item name="android:windowBackground">@drawable/splash</item>
         <item name="windowSplashScreenBackground">#ffffff</item>

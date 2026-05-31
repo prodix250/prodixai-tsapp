@@ -98,79 +98,43 @@ async function getGeminiResponse(
 
   const sysInstruction = getSystemInstruction(documentContext, documentName);
 
-  // --- PHASE 1: Prioritize Google Search Grounding Across ALL Active Keys ---
-  console.log(`[ProdixAI Key Pool] Phase 1 - Attempting Google Search Grounding across all ${activeKeys.length} active keys...`);
-  for (let i = 0; i < activeKeys.length; i++) {
-    const currentApiKey = activeKeys[i];
-    const keyIndexInRaw = currentApiKeys.indexOf(currentApiKey);
-    const resolvedIndex = keyIndexInRaw >= 0 ? keyIndexInRaw : i;
+  // If contents contain inlineData (image/PDF), we skip Phase 1 (Google Search Grounding) because search isn't supported with images/multimodal and causes huge delays or errors.
+  const hasMultimodalInput = contents.some(c => 
+    c.parts && c.parts.some(p => p.inlineData)
+  );
 
-    const searchCooldownEnd = searchGroundingCooldowns.get(currentApiKey) || 0;
-    const isSearchDisabled = Date.now() < searchCooldownEnd;
+  if (hasMultimodalInput) {
+    console.log("[ProdixAI Key Pool] Multimodal input detected. Bypassing Phase 1 (Google Search Grounding) for extremely fast native vision performance (< 3s).");
+  } else {
+    // --- PHASE 1: Prioritize Google Search Grounding Across ALL Active Keys ---
+    console.log(`[ProdixAI Key Pool] Phase 1 - Attempting Google Search Grounding across all ${activeKeys.length} active keys...`);
+    for (let i = 0; i < activeKeys.length; i++) {
+      const currentApiKey = activeKeys[i];
+      const keyIndexInRaw = currentApiKeys.indexOf(currentApiKey);
+      const resolvedIndex = keyIndexInRaw >= 0 ? keyIndexInRaw : i;
 
-    if (isSearchDisabled) {
-      console.log(`[ProdixAI Key Pool] Search is on cooldown for Key Index ${resolvedIndex}. Skipping Phase 1 for this key.`);
-      continue;
-    }
+      const searchCooldownEnd = searchGroundingCooldowns.get(currentApiKey) || 0;
+      const isSearchDisabled = Date.now() < searchCooldownEnd;
 
-    const ai = new GoogleGenAI({
-      apiKey: currentApiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build'
-        }
-      }
-    });
-
-    // 1. Try gemini-3.5-flash with Google Search
-    try {
-      console.log(`[ProdixAI API] [Phase 1 - Key Index ${resolvedIndex}] Trying gemini-3.5-flash with Google Search...`);
-      const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
-        contents,
-        config: {
-          systemInstruction: sysInstruction,
-          tools: [{ googleSearch: {} }]
-        }
-      });
-
-      if (response && response.text) {
-        console.log(`[ProdixAI API Success] [Phase 1] Successfully loaded response using model gemini-3.5-flash + Google Search (Key ID: ${resolvedIndex})`);
-        return {
-          text: response.text,
-          modelLabel: "ProdixAI (gemini-3.5-flash + Google Search)"
-        };
-      }
-    } catch (error: any) {
-      lastError = error;
-      const checkErrStr = (error.message || String(error)).toLowerCase();
-      console.warn(`[Key Loop Error] [Phase 1 - Key Index ${resolvedIndex}] Google Search failed on gemini-3.5-flash. Error: ${error.message || error}`);
-      
-      // If the API key is invalid/expired, skip tries on this key immediately
-      if (checkErrStr.includes("api key not valid") || 
-          checkErrStr.includes("api_key_invalid") || 
-          checkErrStr.includes("invalid api key") ||
-          checkErrStr.includes("unauthorized") ||
-          checkErrStr.includes("invalid key")) {
-        console.warn(`[ProdixAI Key Pool] Key Index ${resolvedIndex} detected as invalid. Marking exhausted.`);
-        exhaustedKeyCooldowns.set(currentApiKey, Date.now() + 3600000 * 24); // Cooldown for 24h
+      if (isSearchDisabled) {
+        console.log(`[ProdixAI Key Pool] Search is on cooldown for Key Index ${resolvedIndex}. Skipping Phase 1 for this key.`);
         continue;
       }
 
-      // Search rate/quota limits triggers search cooldown for this key
-      if (checkErrStr.includes("quota") || checkErrStr.includes("limit") || checkErrStr.includes("resource_exhausted") || checkErrStr.includes("429")) {
-        console.warn(`[ProdixAI Key Pool] Google Search Grounding hit quota limits on gemini-3.5-flash for Key Index ${resolvedIndex}. Cooldown search for 5 minutes.`);
-        searchGroundingCooldowns.set(currentApiKey, Date.now() + 300000);
-      }
-    }
+      const ai = new GoogleGenAI({
+        apiKey: currentApiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build'
+          }
+        }
+      });
 
-    // 2. Try gemini-3.1-flash-lite with Google Search (as secondary search option on this key)
-    const updatedSearchCooldownEnd = searchGroundingCooldowns.get(currentApiKey) || 0;
-    if (Date.now() >= updatedSearchCooldownEnd) {
+      // 1. Try gemini-3.5-flash with Google Search
       try {
-        console.log(`[ProdixAI API] [Phase 1 - Key Index ${resolvedIndex}] Trying gemini-3.1-flash-lite with Google Search...`);
+        console.log(`[ProdixAI API] [Phase 1 - Key Index ${resolvedIndex}] Trying gemini-3.5-flash with Google Search...`);
         const response = await ai.models.generateContent({
-          model: "gemini-3.1-flash-lite",
+          model: "gemini-3.5-flash",
           contents,
           config: {
             systemInstruction: sysInstruction,
@@ -179,20 +143,65 @@ async function getGeminiResponse(
         });
 
         if (response && response.text) {
-          console.log(`[ProdixAI API Success] [Phase 1] Successfully loaded response using model gemini-3.1-flash-lite + Google Search (Key ID: ${resolvedIndex})`);
+          console.log(`[ProdixAI API Success] [Phase 1] Successfully loaded response using model gemini-3.5-flash + Google Search (Key ID: ${resolvedIndex})`);
           return {
             text: response.text,
-            modelLabel: "ProdixAI (gemini-3.1-flash-lite + Google Search)"
+            modelLabel: "ProdixAI (gemini-3.5-flash + Google Search)"
           };
         }
       } catch (error: any) {
         lastError = error;
         const checkErrStr = (error.message || String(error)).toLowerCase();
-        console.warn(`[Key Loop Error] [Phase 1 - Key Index ${resolvedIndex}] Google Search failed on gemini-3.1-flash-lite. Error: ${error.message || error}`);
+        console.warn(`[Key Loop Error] [Phase 1 - Key Index ${resolvedIndex}] Google Search failed on gemini-3.5-flash. Error: ${error.message || error}`);
+        
+        // If the API key is invalid/expired, skip tries on this key immediately
+        if (checkErrStr.includes("api key not valid") || 
+            checkErrStr.includes("api_key_invalid") || 
+            checkErrStr.includes("invalid api key") ||
+            checkErrStr.includes("unauthorized") ||
+            checkErrStr.includes("invalid key")) {
+          console.warn(`[ProdixAI Key Pool] Key Index ${resolvedIndex} detected as invalid. Marking exhausted.`);
+          exhaustedKeyCooldowns.set(currentApiKey, Date.now() + 3600000 * 24); // Cooldown for 24h
+          continue;
+        }
 
+        // Search rate/quota limits triggers search cooldown for this key
         if (checkErrStr.includes("quota") || checkErrStr.includes("limit") || checkErrStr.includes("resource_exhausted") || checkErrStr.includes("429")) {
-          console.warn(`[ProdixAI Key Pool] Google Search Grounding hit quota limits on gemini-3.1-flash-lite for Key Index ${resolvedIndex}. Cooldown search for 5 minutes.`);
+          console.warn(`[ProdixAI Key Pool] Google Search Grounding hit quota limits on gemini-3.5-flash for Key Index ${resolvedIndex}. Cooldown search for 5 minutes.`);
           searchGroundingCooldowns.set(currentApiKey, Date.now() + 300000);
+        }
+      }
+
+      // 2. Try gemini-3.1-flash-lite with Google Search (as secondary search option on this key)
+      const updatedSearchCooldownEnd = searchGroundingCooldowns.get(currentApiKey) || 0;
+      if (Date.now() >= updatedSearchCooldownEnd) {
+        try {
+          console.log(`[ProdixAI API] [Phase 1 - Key Index ${resolvedIndex}] Trying gemini-3.1-flash-lite with Google Search...`);
+          const response = await ai.models.generateContent({
+            model: "gemini-3.1-flash-lite",
+            contents,
+            config: {
+              systemInstruction: sysInstruction,
+              tools: [{ googleSearch: {} }]
+            }
+          });
+
+          if (response && response.text) {
+            console.log(`[ProdixAI API Success] [Phase 1] Successfully loaded response using model gemini-3.1-flash-lite + Google Search (Key ID: ${resolvedIndex})`);
+            return {
+              text: response.text,
+              modelLabel: "ProdixAI (gemini-3.1-flash-lite + Google Search)"
+            };
+          }
+        } catch (error: any) {
+          lastError = error;
+          const checkErrStr = (error.message || String(error)).toLowerCase();
+          console.warn(`[Key Loop Error] [Phase 1 - Key Index ${resolvedIndex}] Google Search failed on gemini-3.1-flash-lite. Error: ${error.message || error}`);
+
+          if (checkErrStr.includes("quota") || checkErrStr.includes("limit") || checkErrStr.includes("resource_exhausted") || checkErrStr.includes("429")) {
+            console.warn(`[ProdixAI Key Pool] Google Search Grounding hit quota limits on gemini-3.1-flash-lite for Key Index ${resolvedIndex}. Cooldown search for 5 minutes.`);
+            searchGroundingCooldowns.set(currentApiKey, Date.now() + 300000);
+          }
         }
       }
     }
@@ -389,9 +398,9 @@ When analyzing this document text, you must follow these rules:
 1. If the user's latest message is just registering or asking about the document, or if it is the first question about this document context, you MUST greet them exactly with: "Nabonye document yawe ${documentName || "document"}. Ni iki uburyo nagufasha kuyisesengura?" (or "I have received your document ${documentName || "document"}. How can I help you analyze it?" if they asked in English), and then briefly offer to summarize or answer questions.
 2. Always answer based accurately and truthfully on the extracted Document Context above. If the information is not present or cannot be found, say so honestly without making up content.
 3. You must be able to summarize the document, find specific information, or translate parts of it into Kinyarwanda/English based on the user's requests.` : ""}
-DOCUMENT GENERATION:
+DOCUMENT GENERATION AND STRICT LIMIT:
 You have the ability to generate structured documents, reports, formal letters, or PDFs when requested.
-CRITICAL MANDATE: You must NOT generate documents automatically. ONLY generate a formal document, letter, report, or PDF if the user explicitly uses keywords like 'create document', 'generate docx', 'make a pdf', 'save as doc', 'nkorera pdf', 'nkorera docs', 'generate pdf', 'gusaba akazi', 'nyandikira ibaruwa' or similar explicit document demands. Otherwise, simply respond in standard conversational text and markdown without headers.
+CRITICAL MANDATE - STRICT DOCUMENT DIRECTIVE: You must NEVER generate a DOCX, PDF, or formal document structure unless the user explicitly asks you to create a document, PDF, report, or file (using explicit words like 'create a document', 'make a PDF', 'generate a file', 'pdf ya...', 'nkorera pdf', 'gusaba akazi', 'save as doc', etc.). For ALL other queries, including general conversations, code help, and ESPECIALLY image analysis / vision descriptions, you MUST respond in normal conversational TEXT ONLY in the chat. Do not output top-level Heading 1 title headers or envelope recipient headers unless document generation was explicitly requested.
 When requested, you MUST:
 1. Provide a comprehensive, formal, and authoritative content response using rich, perfectly structured markdown in the chat first.
 2. Structure your response with a clear Heading 1 at the very top (e.g. "# Official Report: [Subject]" or "# Reference Letter for [Person]") so that the UI can detect the subject and use it for the file name.

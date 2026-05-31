@@ -181,27 +181,40 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
     const prevTextLower = prevUserText.toLowerCase();
 
     const userRequestedDoc = 
+      prevTextLower.includes("create a document") ||
+      prevTextLower.includes("make a pdf") ||
+      prevTextLower.includes("generate a file") ||
+      prevTextLower.includes("create a pdf") ||
+      prevTextLower.includes("make a docx") ||
+      prevTextLower.includes("generate a document") ||
       prevTextLower.includes("nkorera docs") ||
       prevTextLower.includes("docs ya") ||
+      prevTextLower.includes("nyandikira ibaruwa") ||
+      prevTextLower.includes("nkorera ibaruwa") ||
+      prevTextLower.includes("nkorera report") ||
+      prevTextLower.includes("nyandikira report") ||
       prevTextLower.includes("create a report") ||
       prevTextLower.includes("report about") ||
-      prevTextLower.includes("generate a document") ||
-      prevTextLower.includes("document for") ||
-      prevTextLower.includes("create a document") ||
-      prevTextLower.includes("nkorera ibaruwa") ||
-      prevTextLower.includes("formal letter") ||
-      prevTextLower.includes("nkorera report") ||
       prevTextLower.includes("generate a report") ||
-      prevTextLower.includes("nyandikira ibaruwa") ||
-      prevTextLower.includes("nyandikira report");
+      prevTextLower.includes("formal letter") ||
+      prevTextLower.includes("document for") ||
+      prevTextLower.includes("pdf ya") ||
+      prevTextLower.includes("nyandikira inyandiko") ||
+      prevTextLower.includes("nkorera inyandiko") ||
+      prevTextLower.includes("gukora inyandiko") ||
+      prevTextLower.includes("gukora pdf") ||
+      prevTextLower.includes("gukora docx") ||
+      prevTextLower.includes("generate docx") ||
+      prevTextLower.includes("save as doc") ||
+      prevTextLower.includes("nkorera pdf") ||
+      prevTextLower.includes("nkorera docs") ||
+      prevTextLower.includes("generate pdf") ||
+      prevTextLower.includes("gusaba akazi") ||
+      prevTextLower.includes("nyandikira inyandiko") ||
+      prevTextLower.includes("inyandiko ya") ||
+      prevTextLower.includes("document ya");
 
-    const containsDocIndicator = 
-      rawAIResponse.trim().startsWith("#") || 
-      textLower.includes("subject:") || 
-      textLower.includes("impamvu:") ||
-      textLower.includes("kuri:");
-
-    if (userRequestedDoc || (containsDocIndicator && rawAIResponse.length > 150)) {
+    if (userRequestedDoc) {
       // It's a professional document! Parse title & type
       const titleMatch = rawAIResponse.match(/^#\s+(.+)$/m);
       let docTitle = "Document";
@@ -284,27 +297,40 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
     const prevTextLower = prevMsg?.text?.toLowerCase() || "";
 
     const userRequestedDoc = 
+      prevTextLower.includes("create a document") ||
+      prevTextLower.includes("make a pdf") ||
+      prevTextLower.includes("generate a file") ||
+      prevTextLower.includes("create a pdf") ||
+      prevTextLower.includes("make a docx") ||
+      prevTextLower.includes("generate a document") ||
       prevTextLower.includes("nkorera docs") ||
       prevTextLower.includes("docs ya") ||
+      prevTextLower.includes("nyandikira ibaruwa") ||
+      prevTextLower.includes("nkorera ibaruwa") ||
+      prevTextLower.includes("nkorera report") ||
+      prevTextLower.includes("nyandikira report") ||
       prevTextLower.includes("create a report") ||
       prevTextLower.includes("report about") ||
-      prevTextLower.includes("generate a document") ||
-      prevTextLower.includes("document for") ||
-      prevTextLower.includes("create a document") ||
-      prevTextLower.includes("nkorera ibaruwa") ||
-      prevTextLower.includes("formal letter") ||
-      prevTextLower.includes("nkorera report") ||
       prevTextLower.includes("generate a report") ||
-      prevTextLower.includes("nyandikira ibaruwa") ||
-      prevTextLower.includes("nyandikira report");
+      prevTextLower.includes("formal letter") ||
+      prevTextLower.includes("document for") ||
+      prevTextLower.includes("pdf ya") ||
+      prevTextLower.includes("nyandikira inyandiko") ||
+      prevTextLower.includes("nkorera inyandiko") ||
+      prevTextLower.includes("gukora inyandiko") ||
+      prevTextLower.includes("gukora pdf") ||
+      prevTextLower.includes("gukora docx") ||
+      prevTextLower.includes("generate docx") ||
+      prevTextLower.includes("save as doc") ||
+      prevTextLower.includes("nkorera pdf") ||
+      prevTextLower.includes("nkorera docs") ||
+      prevTextLower.includes("generate pdf") ||
+      prevTextLower.includes("gusaba akazi") ||
+      prevTextLower.includes("nyandikira inyandiko") ||
+      prevTextLower.includes("inyandiko ya") ||
+      prevTextLower.includes("document ya");
 
-    const containsDocIndicator = 
-      msg.text.trim().startsWith("#") || 
-      textLower.includes("subject:") || 
-      textLower.includes("impamvu:") ||
-      textLower.includes("kuri:");
-
-    if (userRequestedDoc || (containsDocIndicator && msg.text.length > 150)) {
+    if (userRequestedDoc) {
       const titleMatch = msg.text.match(/^#\s+(.+)$/m);
       let docTitle = "Document";
       if (titleMatch && titleMatch[1]) {
