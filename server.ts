@@ -120,28 +120,35 @@ async function getGeminiResponse(
       }
     });
 
-    // 1. Try gemini-3.5-flash which is extremely fast and accurate
+    // 1. Try gemini-2.5-flash for high standard limits (1500 RPD) and general smart performance
     try {
-      console.log(`[ProdixAI API] [Key Index ${resolvedIndex}] Trying gemini-3.5-flash (High-Speed Mode)...`);
-      const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
+      console.log(`[ProdixAI API] [Key Index ${resolvedIndex}] Trying gemini-2.5-flash (High-Speed Mode)...`);
+      
+      const fetchPromise = ai.models.generateContent({
+        model: "gemini-2.5-flash",
         contents,
         config: {
           systemInstruction: sysInstruction
         }
       });
 
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("TIMEOUT_15S")), 15000)
+      );
+
+      const response = await Promise.race([fetchPromise, timeoutPromise]);
+
       if (response && response.text) {
-        console.log(`[ProdixAI Success] Successfully loaded response using gemini-3.5-flash (Key ID: ${resolvedIndex})`);
+        console.log(`[ProdixAI Success] Successfully loaded response using gemini-2.5-flash (Key ID: ${resolvedIndex})`);
         return {
           text: response.text,
-          modelLabel: "ProdixAI (gemini-3.5-flash - Instant Response Mode)"
+          modelLabel: "ProdixAI (gemini-2.5-flash - Lightning Fast Mode)"
         };
       }
     } catch (error: any) {
       lastError = error;
       const checkErrStr = (error.message || String(error)).toLowerCase();
-      console.warn(`[Key Loop Error] Failed on gemini-3.5-flash for Key Index ${resolvedIndex}: ${error.message || error}`);
+      console.warn(`[Key Loop Error] Failed on gemini-2.5-flash for Key Index ${resolvedIndex}: ${error.message || error}`);
       
       // If it is a safety or block issue, don't rotate (rotating keys won't change content filters). Throw it immediately.
       if (checkErrStr.includes("safety") || checkErrStr.includes("block") || checkErrStr.includes("candidate")) {
@@ -160,22 +167,82 @@ async function getGeminiResponse(
         continue; // Instantly go to the next API key silently!
       }
 
-      // For any other error (such as quota exceeded, 429, timeout, network error, etc.), 
-      // mark it on cooldown for 5 minutes and immediately try the next key.
+      // Try falling back to gemini-3.1-flash-lite on the same key resource first before rotating!
+      try {
+        console.log(`[ProdixAI API Fallback] [Key Index ${resolvedIndex}] gemini-2.5-flash failed/limited. Trying gemini-3.1-flash-lite...`);
+        const fetchPromiseLite = ai.models.generateContent({
+          model: "gemini-3.1-flash-lite",
+          contents,
+          config: {
+            systemInstruction: sysInstruction
+          }
+        });
+
+        const timeoutPromiseLite = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("TIMEOUT_15S")), 15000)
+        );
+
+        const responseLite = await Promise.race([fetchPromiseLite, timeoutPromiseLite]);
+
+        if (responseLite && responseLite.text) {
+          console.log(`[ProdixAI Success] Successfully loaded response using gemini-3.1-flash-lite (Key ID: ${resolvedIndex})`);
+          return {
+            text: responseLite.text,
+            modelLabel: "ProdixAI (gemini-3.1-flash-lite - High-Speed Fallback)"
+          };
+        }
+      } catch (liteError: any) {
+        console.warn(`[Key Loop Error] Fallback failed on gemini-3.1-flash-lite for Key Index ${resolvedIndex}: ${liteError.message || liteError}`);
+      }
+
+      // Try falling back to gemini-3.5-flash as a last option on the same key resource before rotating!
+      try {
+        console.log(`[ProdixAI API Fallback] [Key Index ${resolvedIndex}] gemini-3.1-flash-lite failed/limited. Trying gemini-3.5-flash...`);
+        const fetchPromise35 = ai.models.generateContent({
+          model: "gemini-3.5-flash",
+          contents,
+          config: {
+            systemInstruction: sysInstruction
+          }
+        });
+
+        const timeoutPromise35 = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("TIMEOUT_15S")), 15000)
+        );
+
+        const response35 = await Promise.race([fetchPromise35, timeoutPromise35]);
+
+        if (response35 && response35.text) {
+          console.log(`[ProdixAI Success] Successfully loaded response using gemini-3.5-flash (Key ID: ${resolvedIndex})`);
+          return {
+            text: response35.text,
+            modelLabel: "ProdixAI (gemini-3.5-flash - Lightning Fast Fallback)"
+          };
+        }
+      } catch (error35: any) {
+        console.warn(`[Key Loop Error] Fallback failed on gemini-3.5-flash for Key Index ${resolvedIndex}: ${error35.message || error35}`);
+      }
+
+      if (error.message === "TIMEOUT_15S") {
+        console.warn(`[ProdixAI Key Pool] Key Index ${resolvedIndex} timed out (15s). Cooling down key for 5 minutes and rotating to next key immediately...`);
+        exhaustedKeyCooldowns.set(currentApiKey, Date.now() + 300000); // 5 mins cooldown
+        continue; // Try the next key!
+      }
+
+      // For any other error, mark it on cooldown for 5 minutes and immediately try the next key.
       console.warn(`[ProdixAI Key Pool] Key Index ${resolvedIndex} hit an error or limit. Mark on cooldown for 5 minutes & rotating instantly.`);
       exhaustedKeyCooldowns.set(currentApiKey, Date.now() + 300000); // Cooldown for 5 minutes
       continue; // Instantly go to the next API key silently!
     }
   }
 
-  // Desperate backup: If we cycled through all keys and still got nothing, we try gemini-3.1-flash-lite on any non-invalid key
-  console.log(`[ProdixAI Key Pool] Desperate Backup - All key attempts failed for gemini-3.5-flash. Trying backup loop on active keys...`);
+  // Desperate backup: If we cycled through all keys and still got nothing, we try gemini-2.5-flash first, and then gemini-3.1-flash-lite under backup mode
+  console.log(`[ProdixAI Key Pool] Desperate Backup - All key attempts failed. Trying backup loop with gemini-2.5-flash and gemini-3.1-flash-lite...`);
   for (let i = 0; i < activeKeys.length; i++) {
     const currentApiKey = activeKeys[i];
     const keyIndexInRaw = currentApiKeys.indexOf(currentApiKey);
     const resolvedIndex = keyIndexInRaw >= 0 ? keyIndexInRaw : i;
 
-    // Skip if marked as permanently invalid (more than 1 hour remains)
     const cooldownRemaining = (exhaustedKeyCooldowns.get(currentApiKey) || 0) - Date.now();
     if (cooldownRemaining > 3600000) {
       continue;
@@ -189,6 +256,26 @@ async function getGeminiResponse(
         }
       }
     });
+
+    try {
+      console.log(`[ProdixAI API Backup] [Key Index ${resolvedIndex}] Trying backup gemini-2.5-flash...`);
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents,
+        config: {
+          systemInstruction: sysInstruction
+        }
+      });
+
+      if (response && response.text) {
+        return {
+          text: response.text,
+          modelLabel: "ProdixAI (gemini-2.5-flash - Backup Mode)"
+        };
+      }
+    } catch (e) {
+      console.warn(`[Key Loop Backup Error] Backup failed on gemini-2.5-flash for Key Index ${resolvedIndex}: ${e}`);
+    }
 
     try {
       console.log(`[ProdixAI API Backup] [Key Index ${resolvedIndex}] Trying backup gemini-3.1-flash-lite...`);
@@ -221,13 +308,12 @@ function getSystemInstruction(documentContext?: string, documentName?: string): 
     timeStyle: 'long'
   }).format(new Date());
 
-  return `You are ProdixAI, a high-performance assistant created by Kevin. Today is June 1, 2026. You are now in "Instant Response Mode". Your primary goal is to provide fast text answers. Your secondary goal is to generate professional documents ONLY when explicitly requested. You no longer use external search tools. The current time in Rwanda is ${kigaliTime}. Always respond based on this local time. Uwumukiza Kevin created you. Always provide accurate information based on this setup.
+  return `You are ProdixAI, a lightning-fast professional assistant. Your response time must be under 5 seconds. You MUST NOT use tools unless specifically requested. If you are generating an image, just return the image. DO NOT create a document for every answer. Be concise and smart. Today is June 1, 2026. The current time in Rwanda is ${kigaliTime}. Always respond based on this local time. Uwumukiza Kevin created you. Always provide accurate information based on this setup.
 
-PROMPT AND INTENT ANALYSIS RULES (CRITICAL):
-You must carefully analyze the user's intent:
-1. If the user says: "Analyze this image" (or asks about the uploaded image context/vision directly), respond with TEXT in chat only. Do not output Heading 1 title headers or envelope recipient headers.
-2. If the user says: "Analyze this image and put it in a PDF" (or requests a PDF from image/file analysis), respond with PDF document content (Start with a clear markdown Heading 1, e.g. "# Image Analysis Report" and format a professional document structure).
-3. If the user says: "Create a doc about Python" (or requests any doc/document/docx), respond with DOCX document content (Start with a clear markdown Heading 1, e.g. "# Python Programming Guide" and format a professional document structure).
+STRICT TOOL SEPARATION (CRITICAL):
+1. If the user asks for an image (e.g., photo, drawing, picture, likeness, "shaka ifoto ya..."): Trigger the imageGenerator ONLY. Show it in the chat. You are STRICTLY FORBIDDEN from putting an image/markdown inside a DOCX/PDF document.
+2. If the user asks for text: Respond with TEXT ONLY in the chat. DO NOT generate structured Heading 1 documents for normal answers, explanations, or code helper queries.
+3. If and ONLY if the user explicitly says 'DOCX', 'PDF', or 'Document': Trigger documentGenerator ONLY. Otherwise, NEVER create a document layout or return any header format beginning with "# title" representing a doc.
 
 COOPERATIVE ERROR HANDLING FOR EMPTY DOCUMENTS:
 If a user asks or triggers you to create/generate a document, but the source text or context is empty or missing necessary details, DO NOT FAIL or complain with dry error answers. Instead, provide a highly structured, professional summary outline of what would have been written in the requested document. Write this summary nicely using Heading 1 at the top so the frontend can still successfully load a document preview view for it.
@@ -345,8 +431,11 @@ app.post("/api/chat", async (req, res) => {
     const { history, message, file, documentContext, documentName } = req.body;
     const currentApiKeys = getApiKeys();
 
+    // LATENCY OPTIMIZATION: Trim user history to the last 10 messages to keep the request small, fast, and light
+    const trimmedHistory = (history || []).slice(-10);
+
     // Format history messages into Content objects
-    const contents: Content[] = (history || []).map((msg: any) => ({
+    const contents: Content[] = trimmedHistory.map((msg: any) => ({
       role: msg.role === "user" ? "user" : "model",
       parts: [{ text: msg.text || "" }]
     }));
@@ -377,6 +466,14 @@ app.post("/api/chat", async (req, res) => {
       const result = await getGeminiResponse(contents, documentContext, documentName);
       res.json({ text: result.text, modelLabel: result.modelLabel });
     } catch (lastError: any) {
+      if (lastError.message && lastError.message.includes("TIMEOUT")) {
+        console.warn("[ProdixAI API Timeout] High-speed timeout triggered.");
+        return res.json({
+          text: "Mahozo! Igisubizo cyatwaye igihe kirekire kirenze igipimo cyacu cy'amasegonda. Kugira ngo dukomeze kugenda nka rukuruzi kandi vuba, gerageza kongera ubaze neza cyangwa ugabanye ibibazo nkurikire icyarimwe!",
+          modelLabel: "ProdixAI (gemini-2.5-flash - Ultra-Speed Timeout Fallback)"
+        });
+      }
+
       let errorMessage = "PRODIX AI is busy, please try again in a moment.";
       if (currentApiKeys.length === 0) {
         errorMessage = "PRODIX API Key is not configured. Please add GEMINI_API_KEY_1, GEMINI_API_KEY_2, GEMINI_API_KEY_3, or GEMINI_API_KEY_4 in the Settings -> Secrets panel.";

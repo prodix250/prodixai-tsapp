@@ -180,6 +180,46 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
     const textLower = rawAIResponse.toLowerCase();
     const prevTextLower = prevUserText.toLowerCase();
 
+    // Check if the response contains image keywords or image markdown from pollinations
+    const isImage = 
+      textLower.includes("image.pollinations.ai") || 
+      textLower.includes("pollinations") || 
+      textLower.includes("![") ||
+      prevTextLower.includes("ifoto") ||
+      prevTextLower.includes("amafoto") ||
+      prevTextLower.includes("photo") ||
+      prevTextLower.includes("photos") ||
+      prevTextLower.includes("image") ||
+      prevTextLower.includes("images") ||
+      prevTextLower.includes("drawing") ||
+      prevTextLower.includes("drawings") ||
+      prevTextLower.includes("picture") ||
+      prevTextLower.includes("pictures") ||
+      prevTextLower.includes("illustration") ||
+      prevTextLower.includes("illustrations") ||
+      prevTextLower.includes("sketch") ||
+      prevTextLower.includes("shaka ifoto") ||
+      prevTextLower.includes("shaka amafoto") ||
+      prevTextLower.includes("shushanya") ||
+      prevTextLower.includes("gushushanya") ||
+      prevTextLower.includes("gukora ifoto") ||
+      prevTextLower.includes("gukora amafoto") ||
+      prevTextLower.includes("nkorera ifoto") ||
+      prevTextLower.includes("nkorera amafoto");
+
+    const isError = 
+      textLower.includes("error:") || 
+      textLower.includes("api key") || 
+      textLower.includes("quota limit") || 
+      textLower.includes("rate limit") || 
+      textLower.includes("expired") || 
+      textLower.includes("rotation") ||
+      textLower.includes("umubare w'ibibazo");
+
+    if (isImage || isError) {
+      return null;
+    }
+
     const userRequestedDoc = 
       prevTextLower.includes("create") ||
       prevTextLower.includes("generate") ||
@@ -190,14 +230,25 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
       prevTextLower.includes("docx") ||
       prevTextLower.includes("doc") ||
       prevTextLower.includes("file") ||
-      prevTextLower.includes("nkorera") ||
-      prevTextLower.includes("ndandikira") ||
       prevTextLower.includes("inyandiko") ||
       prevTextLower.includes("ibaruwa") ||
       prevTextLower.includes("report") ||
-      prevTextLower.includes("nyandikira") ||
-      prevTextLower.includes("gukora") ||
-      prevTextLower.includes("gusaba akazi");
+      prevTextLower.includes("raporo") ||
+      prevTextLower.includes("cv ya") ||
+      prevTextLower.includes("resume") ||
+      prevTextLower.includes("gusaba akazi") ||
+      prevTextLower.includes("nyandikira ibaruwa") ||
+      prevTextLower.includes("ndandikira ibaruwa") ||
+      prevTextLower.includes("nkorera ibaruwa") ||
+      prevTextLower.includes("gukora ibaruwa") ||
+      prevTextLower.includes("nyandikira inyandiko") ||
+      prevTextLower.includes("ndandikira inyandiko") ||
+      prevTextLower.includes("nkorera inyandiko") ||
+      prevTextLower.includes("gukora inyandiko") ||
+      prevTextLower.includes("nyandikira raporo") ||
+      prevTextLower.includes("ndandikira raporo") ||
+      prevTextLower.includes("nkorera raporo") ||
+      prevTextLower.includes("gukora raporo");
 
     if (userRequestedDoc) {
       // It's a professional document! Parse title & type
@@ -281,6 +332,46 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
     const textLower = msg.text.toLowerCase();
     const prevTextLower = prevMsg?.text?.toLowerCase() || "";
 
+    // Check if the response contains image keywords or image markdown from pollinations
+    const isImage = 
+      textLower.includes("image.pollinations.ai") || 
+      textLower.includes("pollinations") || 
+      textLower.includes("![") ||
+      prevTextLower.includes("ifoto") ||
+      prevTextLower.includes("amafoto") ||
+      prevTextLower.includes("photo") ||
+      prevTextLower.includes("photos") ||
+      prevTextLower.includes("image") ||
+      prevTextLower.includes("images") ||
+      prevTextLower.includes("drawing") ||
+      prevTextLower.includes("drawings") ||
+      prevTextLower.includes("picture") ||
+      prevTextLower.includes("pictures") ||
+      prevTextLower.includes("illustration") ||
+      prevTextLower.includes("illustrations") ||
+      prevTextLower.includes("sketch") ||
+      prevTextLower.includes("shaka ifoto") ||
+      prevTextLower.includes("shaka amafoto") ||
+      prevTextLower.includes("shushanya") ||
+      prevTextLower.includes("gushushanya") ||
+      prevTextLower.includes("gukora ifoto") ||
+      prevTextLower.includes("gukora amafoto") ||
+      prevTextLower.includes("nkorera ifoto") ||
+      prevTextLower.includes("nkorera amafoto");
+
+    const isError = 
+      textLower.includes("error:") || 
+      textLower.includes("api key") || 
+      textLower.includes("quota limit") || 
+      textLower.includes("rate limit") || 
+      textLower.includes("expired") || 
+      textLower.includes("rotation") ||
+      textLower.includes("umubare w'ibibazo");
+
+    if (isImage || isError) {
+      return null;
+    }
+
     const userRequestedDoc = 
       prevTextLower.includes("create") ||
       prevTextLower.includes("generate") ||
@@ -291,14 +382,25 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
       prevTextLower.includes("docx") ||
       prevTextLower.includes("doc") ||
       prevTextLower.includes("file") ||
-      prevTextLower.includes("nkorera") ||
-      prevTextLower.includes("ndandikira") ||
       prevTextLower.includes("inyandiko") ||
       prevTextLower.includes("ibaruwa") ||
       prevTextLower.includes("report") ||
-      prevTextLower.includes("nyandikira") ||
-      prevTextLower.includes("gukora") ||
-      prevTextLower.includes("gusaba akazi");
+      prevTextLower.includes("raporo") ||
+      prevTextLower.includes("cv ya") ||
+      prevTextLower.includes("resume") ||
+      prevTextLower.includes("gusaba akazi") ||
+      prevTextLower.includes("nyandikira ibaruwa") ||
+      prevTextLower.includes("ndandikira ibaruwa") ||
+      prevTextLower.includes("nkorera ibaruwa") ||
+      prevTextLower.includes("gukora ibaruwa") ||
+      prevTextLower.includes("nyandikira inyandiko") ||
+      prevTextLower.includes("ndandikira inyandiko") ||
+      prevTextLower.includes("nkorera inyandiko") ||
+      prevTextLower.includes("gukora inyandiko") ||
+      prevTextLower.includes("nyandikira raporo") ||
+      prevTextLower.includes("ndandikira raporo") ||
+      prevTextLower.includes("nkorera raporo") ||
+      prevTextLower.includes("gukora raporo");
 
     if (userRequestedDoc) {
       const titleMatch = msg.text.match(/^#\s+(.+)$/m);
