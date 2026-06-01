@@ -107,7 +107,7 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
     return [{
       id: "init",
       role: "model",
-      text: "Muraho! I am ProdixAI. How can I help you today?",
+      text: "Hello! I am ProdixAI. How can I help you today? (Muraho, ndi ProdixAI. Ndagufasha iki uyu munsi?)",
       timestamp: new Date()
     }];
   });
@@ -561,9 +561,9 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
     );
 
     if (isImageEditRequest) {
-      setCustomLoadingText("Ndirimo guhindura ifoto yawe, akanya gato...");
+      setCustomLoadingText("I am editing your photo, please wait... (Ndirimo guhindura ifoto yawe, akanya gato)");
     } else if (newAttachment) {
-      setCustomLoadingText("Ndirimo gusesengura no gusoma idosiye/ifoto yawe, akanya gato...");
+      setCustomLoadingText("I am analyzing and reading your file/photo, please wait... (Ndirimo gusesengura no gusoma idosiye/ifoto yawe, akanya gato)");
     } else {
       setCustomLoadingText(null);
     }

@@ -227,14 +227,14 @@ export function WatermarkedImage({ url }: { url: string }) {
       <div className="w-full py-5 px-4 bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 text-sm font-sans flex flex-col items-center justify-center rounded-lg mt-2 gap-3 text-center">
         <div className="flex items-center gap-2">
           <AlertCircle className="w-5 h-5 flex-shrink-0" />
-          <span>Ifoto yanze kuza kubera interineti cyangwa ko urubuga ruhuze.</span>
+          <span>Failed to load image due to network issue. (Ifoto yanze kuza kubera interineti cyangwa ko urubuga ruhuze.)</span>
         </div>
         <button
           onClick={handleRetry}
           className="flex items-center gap-2 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-md text-xs font-semibold transition-all shadow-sm cursor-pointer hover:scale-105 active:scale-95"
         >
           <RotateCcw className="w-3.5 h-3.5" />
-          <span>Gerageza na none</span>
+          <span>Retry (Gerageza na none)</span>
         </button>
       </div>
     );
@@ -247,7 +247,7 @@ export function WatermarkedImage({ url }: { url: string }) {
           <div className="text-wa-text-muted text-2xl font-bold tracking-tighter mb-2 animate-bounce">
             PX<span className="text-orange-500 font-extrabold">AI</span>
           </div>
-          <span className="text-sm text-wa-text-muted animate-pulse font-sans">Ndirimo gutunganya ifoto yawe, akanya gato...</span>
+          <span className="text-sm text-wa-text-muted animate-pulse font-sans">Generating your image... (Ndirimo gutunganya ifoto yawe, akanya gato...)</span>
         </div>
       )}
       
