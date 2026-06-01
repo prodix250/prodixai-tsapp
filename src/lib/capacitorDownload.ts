@@ -1,5 +1,4 @@
 import { Filesystem, Directory } from "@capacitor/filesystem";
-import { Toast } from "@capacitor/toast";
 import { Capacitor } from "@capacitor/core";
 
 // Helper to convert a Blob to base64 (with option to strip the data-url prefix)
@@ -77,21 +76,20 @@ export async function downloadFile(urlOrBlob: string | Blob, fileName: string): 
         console.warn("[CapacitorDownload] Failed to request permissions:", permErr);
       }
 
-      // Save to Directory.Documents
+      // Save to standard Download folder on ExternalStorage
       const writeResult = await Filesystem.writeFile({
-        path: fileName,
+        path: "Download/" + fileName,
         data: base64Data,
-        directory: Directory.Documents,
+        directory: Directory.ExternalStorage,
         recursive: true,
       });
 
       console.log(`[CapacitorDownload] File successfully saved to local URI: ${writeResult.uri}`);
 
-      // Show native success toast (NEVER alert)
-      await Toast.show({
-        text: `Saved: ${fileName} in Documents`,
-        duration: "long",
-      });
+      // Dispatch custom success event for the React notification system
+      window.dispatchEvent(new CustomEvent("prodixai-download", {
+        detail: { success: true, message: "Saved to Downloads" }
+      }));
 
       return true;
     } else {
@@ -122,21 +120,22 @@ export async function downloadFile(urlOrBlob: string | Blob, fileName: string): 
           document.body.removeChild(a);
         }, 100);
       }
+
+      // Dispatch custom success event for the React notification system
+      window.dispatchEvent(new CustomEvent("prodixai-download", {
+        detail: { success: true, message: "Saved to Downloads" }
+      }));
+
       return true;
     }
   } catch (error: any) {
     const errorMsg = error?.message || String(error) || "Unknown error occurred";
     console.error("[CapacitorDownload] Error performing file save:", error);
 
-    // Show native error toast (NEVER alert)
-    try {
-      await Toast.show({
-        text: `Download Failed: ${errorMsg}`,
-        duration: "long",
-      });
-    } catch (toastErr) {
-      console.error("[CapacitorDownload] Toast display failed:", toastErr);
-    }
+    // Dispatch custom error event for the React notification system
+    window.dispatchEvent(new CustomEvent("prodixai-download", {
+      detail: { success: false, message: `Download Failed: ${errorMsg}` }
+    }));
     
     // Web emergency fallback if on android browser but capacitor native failed
     try {

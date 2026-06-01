@@ -7,6 +7,8 @@ import React, { useState, useEffect } from "react";
 import { ChatList } from "./components/ChatList";
 import { ChatInterface } from "./components/ChatInterface";
 import { ChatSession } from "./types";
+import { motion, AnimatePresence } from "motion/react";
+import { Check, AlertCircle } from "lucide-react";
 
 export default function App() {
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
@@ -53,6 +55,36 @@ export default function App() {
     }
     return null;
   });
+
+  // Custom Toast State for standard styled notification component
+  const [showToast, setShowToast] = useState<boolean>(false);
+  const [toastMessage, setToastMessage] = useState<string>("");
+  const [toastSuccess, setToastSuccess] = useState<boolean>(true);
+
+  useEffect(() => {
+    const handleDownloadEvent = (e: Event) => {
+      const customEvent = e as CustomEvent<{ success: boolean; message: string }>;
+      if (customEvent.detail) {
+        setToastMessage(customEvent.detail.message);
+        setToastSuccess(customEvent.detail.success);
+        setShowToast(true);
+      }
+    };
+
+    window.addEventListener("prodixai-download", handleDownloadEvent);
+    return () => {
+      window.removeEventListener("prodixai-download", handleDownloadEvent);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (showToast) {
+      const timer = setTimeout(() => {
+        setShowToast(false);
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [showToast]);
 
   useEffect(() => {
     if (activeSession) {
@@ -168,6 +200,32 @@ export default function App() {
                />
              </div>
           </div>
+
+          {/* Custom Styled Notification Component */}
+          <AnimatePresence>
+            {showToast && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.85, y: 30, x: "-50%" }}
+                animate={{ opacity: 1, scale: 1, y: 0, x: "-50%" }}
+                exit={{ opacity: 0, scale: 0.9, y: 15, x: "-50%" }}
+                transition={{ duration: 0.25, ease: [0.21, 1.02, 0.43, 1.01] }}
+                className="absolute bottom-6 left-1/2 z-[9999] flex items-center gap-3 px-5 py-3.5 bg-[#1f2c33] border border-[#00a884]/40 rounded-xl shadow-2xl backdrop-blur-md min-w-[260px] max-w-[90%]"
+              >
+                <div className={`p-1.5 rounded-full ${toastSuccess ? "bg-[#00a884]/20" : "bg-red-500/20"}`}>
+                  {toastSuccess ? (
+                    <Check className="w-4 h-4 text-[#00df82]" />
+                  ) : (
+                    <AlertCircle className="w-4 h-4 text-red-400" />
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[#00df82] font-bold text-sm tracking-wide truncate">
+                    {toastMessage}
+                  </p>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
       </div>
     </div>
   );

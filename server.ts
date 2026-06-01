@@ -98,125 +98,16 @@ async function getGeminiResponse(
 
   const sysInstruction = getSystemInstruction(documentContext, documentName);
 
-  // If contents contain inlineData (image/PDF), we skip Phase 1 (Google Search Grounding) because search isn't supported with images/multimodal and causes huge delays or errors.
-  const hasMultimodalInput = contents.some(c => 
-    c.parts && c.parts.some(p => p.inlineData)
-  );
-
-  if (hasMultimodalInput) {
-    console.log("[ProdixAI Key Pool] Multimodal input detected. Bypassing Phase 1 (Google Search Grounding) for extremely fast native vision performance (< 3s).");
-  } else {
-    // --- PHASE 1: Prioritize Google Search Grounding Across ALL Active Keys ---
-    console.log(`[ProdixAI Key Pool] Phase 1 - Attempting Google Search Grounding across all ${activeKeys.length} active keys...`);
-    for (let i = 0; i < activeKeys.length; i++) {
-      const currentApiKey = activeKeys[i];
-      const keyIndexInRaw = currentApiKeys.indexOf(currentApiKey);
-      const resolvedIndex = keyIndexInRaw >= 0 ? keyIndexInRaw : i;
-
-      const searchCooldownEnd = searchGroundingCooldowns.get(currentApiKey) || 0;
-      const isSearchDisabled = Date.now() < searchCooldownEnd;
-
-      if (isSearchDisabled) {
-        console.log(`[ProdixAI Key Pool] Search is on cooldown for Key Index ${resolvedIndex}. Skipping Phase 1 for this key.`);
-        continue;
-      }
-
-      const ai = new GoogleGenAI({
-        apiKey: currentApiKey,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build'
-          }
-        }
-      });
-
-      // 1. Try gemini-3.5-flash with Google Search
-      try {
-        console.log(`[ProdixAI API] [Phase 1 - Key Index ${resolvedIndex}] Trying gemini-3.5-flash with Google Search...`);
-        const response = await ai.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents,
-          config: {
-            systemInstruction: sysInstruction,
-            tools: [{ googleSearch: {} }]
-          }
-        });
-
-        if (response && response.text) {
-          console.log(`[ProdixAI API Success] [Phase 1] Successfully loaded response using model gemini-3.5-flash + Google Search (Key ID: ${resolvedIndex})`);
-          return {
-            text: response.text,
-            modelLabel: "ProdixAI (gemini-3.5-flash + Google Search)"
-          };
-        }
-      } catch (error: any) {
-        lastError = error;
-        const checkErrStr = (error.message || String(error)).toLowerCase();
-        console.warn(`[Key Loop Error] [Phase 1 - Key Index ${resolvedIndex}] Google Search failed on gemini-3.5-flash. Error: ${error.message || error}`);
-        
-        // If the API key is invalid/expired, skip tries on this key immediately
-        if (checkErrStr.includes("api key not valid") || 
-            checkErrStr.includes("api_key_invalid") || 
-            checkErrStr.includes("invalid api key") ||
-            checkErrStr.includes("unauthorized") ||
-            checkErrStr.includes("invalid key")) {
-          console.warn(`[ProdixAI Key Pool] Key Index ${resolvedIndex} detected as invalid. Marking exhausted.`);
-          exhaustedKeyCooldowns.set(currentApiKey, Date.now() + 3600000 * 24); // Cooldown for 24h
-          continue;
-        }
-
-        // Search rate/quota limits triggers search cooldown for this key
-        if (checkErrStr.includes("quota") || checkErrStr.includes("limit") || checkErrStr.includes("resource_exhausted") || checkErrStr.includes("429")) {
-          console.warn(`[ProdixAI Key Pool] Google Search Grounding hit quota limits on gemini-3.5-flash for Key Index ${resolvedIndex}. Cooldown search for 5 minutes.`);
-          searchGroundingCooldowns.set(currentApiKey, Date.now() + 300000);
-        }
-      }
-
-      // 2. Try gemini-3.1-flash-lite with Google Search (as secondary search option on this key)
-      const updatedSearchCooldownEnd = searchGroundingCooldowns.get(currentApiKey) || 0;
-      if (Date.now() >= updatedSearchCooldownEnd) {
-        try {
-          console.log(`[ProdixAI API] [Phase 1 - Key Index ${resolvedIndex}] Trying gemini-3.1-flash-lite with Google Search...`);
-          const response = await ai.models.generateContent({
-            model: "gemini-3.1-flash-lite",
-            contents,
-            config: {
-              systemInstruction: sysInstruction,
-              tools: [{ googleSearch: {} }]
-            }
-          });
-
-          if (response && response.text) {
-            console.log(`[ProdixAI API Success] [Phase 1] Successfully loaded response using model gemini-3.1-flash-lite + Google Search (Key ID: ${resolvedIndex})`);
-            return {
-              text: response.text,
-              modelLabel: "ProdixAI (gemini-3.1-flash-lite + Google Search)"
-            };
-          }
-        } catch (error: any) {
-          lastError = error;
-          const checkErrStr = (error.message || String(error)).toLowerCase();
-          console.warn(`[Key Loop Error] [Phase 1 - Key Index ${resolvedIndex}] Google Search failed on gemini-3.1-flash-lite. Error: ${error.message || error}`);
-
-          if (checkErrStr.includes("quota") || checkErrStr.includes("limit") || checkErrStr.includes("resource_exhausted") || checkErrStr.includes("429")) {
-            console.warn(`[ProdixAI Key Pool] Google Search Grounding hit quota limits on gemini-3.1-flash-lite for Key Index ${resolvedIndex}. Cooldown search for 5 minutes.`);
-            searchGroundingCooldowns.set(currentApiKey, Date.now() + 300000);
-          }
-        }
-      }
-    }
-  }
-
-  // --- PHASE 2: Fallback WITHOUT Google Search Across All Active Keys ---
-  console.log(`[ProdixAI Key Pool] Phase 1 exhausted or cooldowned on all keys. Proceeding to Phase 2 (Non-Search fallback)...`);
+  console.log(`[ProdixAI Key Pool] Calling Gemini with ${activeKeys.length} active keys in High-Speed Internal Knowledge mode...`);
+  
   for (let i = 0; i < activeKeys.length; i++) {
     const currentApiKey = activeKeys[i];
     const keyIndexInRaw = currentApiKeys.indexOf(currentApiKey);
     const resolvedIndex = keyIndexInRaw >= 0 ? keyIndexInRaw : i;
 
-    // Skip if marked as invalid during Phase 1
+    // Skip if marked as invalid
     if ((exhaustedKeyCooldowns.get(currentApiKey) || 0) - Date.now() > 3600000) {
-      console.log(`[ProdixAI Key Pool] Skipping Key Index ${resolvedIndex} in Phase 2 due to invalid key status.`);
+      console.log(`[ProdixAI Key Pool] Skipping Key Index ${resolvedIndex} due to invalid status.`);
       continue;
     }
 
@@ -229,9 +120,9 @@ async function getGeminiResponse(
       }
     });
 
-    // 3. Fallback: gemini-3.5-flash WITHOUT search
+    // 1. Try gemini-3.5-flash which is extremely fast and accurate
     try {
-      console.log(`[ProdixAI API] [Phase 2 - Key Index ${resolvedIndex}] Falling back to gemini-3.5-flash WITHOUT Google Search...`);
+      console.log(`[ProdixAI API] [Key Index ${resolvedIndex}] Trying gemini-3.5-flash (High-Speed Mode)...`);
       const response = await ai.models.generateContent({
         model: "gemini-3.5-flash",
         contents,
@@ -241,20 +132,66 @@ async function getGeminiResponse(
       });
 
       if (response && response.text) {
-        console.log(`[ProdixAI API Success] [Phase 2] Successfully loaded fallback response using gemini-3.5-flash (Key ID: ${resolvedIndex})`);
+        console.log(`[ProdixAI Success] Successfully loaded response using gemini-3.5-flash (Key ID: ${resolvedIndex})`);
         return {
           text: response.text,
-          modelLabel: "ProdixAI (gemini-3.5-flash - Search Limit Hit)"
+          modelLabel: "ProdixAI (gemini-3.5-flash - Instant Response Mode)"
         };
       }
     } catch (error: any) {
       lastError = error;
-      console.warn(`[Key Loop Error] [Phase 2 - Key Index ${resolvedIndex}] Fallback WITHOUT search failed on gemini-3.5-flash. Error: ${error.message || error}`);
+      const checkErrStr = (error.message || String(error)).toLowerCase();
+      console.warn(`[Key Loop Error] Failed on gemini-3.5-flash for Key Index ${resolvedIndex}: ${error.message || error}`);
+      
+      // If it is a safety or block issue, don't rotate (rotating keys won't change content filters). Throw it immediately.
+      if (checkErrStr.includes("safety") || checkErrStr.includes("block") || checkErrStr.includes("candidate")) {
+        throw error;
+      }
+
+      // If it is an invalid API key, mark it exhausted for 24 hours so it won't be queried anymore.
+      if (checkErrStr.includes("api key not valid") || 
+          checkErrStr.includes("api_key_invalid") || 
+          checkErrStr.includes("invalid api key") ||
+          checkErrStr.includes("unauthorized") ||
+          checkErrStr.includes("invalid key") ||
+          checkErrStr.includes("credential")) {
+        console.warn(`[ProdixAI Key Pool] Key Index ${resolvedIndex} detected as invalid. Marking exhausted for 24h & rotating instantly.`);
+        exhaustedKeyCooldowns.set(currentApiKey, Date.now() + 3600000 * 24); // Cooldown for 24h
+        continue; // Instantly go to the next API key silently!
+      }
+
+      // For any other error (such as quota exceeded, 429, timeout, network error, etc.), 
+      // mark it on cooldown for 5 minutes and immediately try the next key.
+      console.warn(`[ProdixAI Key Pool] Key Index ${resolvedIndex} hit an error or limit. Mark on cooldown for 5 minutes & rotating instantly.`);
+      exhaustedKeyCooldowns.set(currentApiKey, Date.now() + 300000); // Cooldown for 5 minutes
+      continue; // Instantly go to the next API key silently!
+    }
+  }
+
+  // Desperate backup: If we cycled through all keys and still got nothing, we try gemini-3.1-flash-lite on any non-invalid key
+  console.log(`[ProdixAI Key Pool] Desperate Backup - All key attempts failed for gemini-3.5-flash. Trying backup loop on active keys...`);
+  for (let i = 0; i < activeKeys.length; i++) {
+    const currentApiKey = activeKeys[i];
+    const keyIndexInRaw = currentApiKeys.indexOf(currentApiKey);
+    const resolvedIndex = keyIndexInRaw >= 0 ? keyIndexInRaw : i;
+
+    // Skip if marked as permanently invalid (more than 1 hour remains)
+    const cooldownRemaining = (exhaustedKeyCooldowns.get(currentApiKey) || 0) - Date.now();
+    if (cooldownRemaining > 3600000) {
+      continue;
     }
 
-    // 4. Fallback: gemini-3.1-flash-lite WITHOUT search
+    const ai = new GoogleGenAI({
+      apiKey: currentApiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build'
+        }
+      }
+    });
+
     try {
-      console.log(`[ProdixAI API] [Phase 2 - Key Index ${resolvedIndex}] Falling back to gemini-3.1-flash-lite WITHOUT Google Search...`);
+      console.log(`[ProdixAI API Backup] [Key Index ${resolvedIndex}] Trying backup gemini-3.1-flash-lite...`);
       const response = await ai.models.generateContent({
         model: "gemini-3.1-flash-lite",
         contents,
@@ -264,49 +201,16 @@ async function getGeminiResponse(
       });
 
       if (response && response.text) {
-        console.log(`[ProdixAI API Success] [Phase 2] Successfully loaded fallback response using gemini-3.1-flash-lite (Key ID: ${resolvedIndex})`);
         return {
           text: response.text,
-          modelLabel: "ProdixAI (gemini-3.1-flash-lite - Search Limit Hit)"
+          modelLabel: "ProdixAI (gemini-3.1-flash-lite - Backup Mode)"
         };
       }
-    } catch (error: any) {
-      lastError = error;
-      console.warn(`[Key Loop Error] [Phase 2 - Key Index ${resolvedIndex}] Fallback WITHOUT search failed on gemini-3.1-flash-lite. Error: ${error.message || error}`);
-    }
-
-    // 5. Fallback: gemini-flash-latest WITHOUT search
-    try {
-      console.log(`[ProdixAI API] [Phase 2 - Key Index ${resolvedIndex}] Falling back to gemini-flash-latest WITHOUT Google Search...`);
-      const response = await ai.models.generateContent({
-        model: "gemini-flash-latest",
-        contents,
-        config: {
-          systemInstruction: sysInstruction
-        }
-      });
-
-      if (response && response.text) {
-        console.log(`[ProdixAI API Success] [Phase 2] Successfully loaded fallback response using gemini-flash-latest (Key ID: ${resolvedIndex})`);
-        return {
-          text: response.text,
-          modelLabel: "ProdixAI (gemini-flash-latest - Search Limit Hit)"
-        };
-      }
-    } catch (error: any) {
-      lastError = error;
-      const checkErrStr = (error.message || String(error)).toLowerCase();
-      console.warn(`[Key Loop Error] [Phase 2 - Key Index ${resolvedIndex}] Fallback WITHOUT search failed on gemini-flash-latest. Error: ${error.message || error}`);
-
-      // If all fallbacks failed and it is still a general quota rate-limit, cooling down the whole key for 2 minutes is ideal to rotate immediately to other keys.
-      if (checkErrStr.includes("quota") || checkErrStr.includes("limit") || checkErrStr.includes("resource_exhausted") || checkErrStr.includes("429")) {
-        console.warn(`[ProdixAI Key Pool] Key Index ${resolvedIndex} has hit general fallback limit. Cooldown entire key for 2 minutes.`);
-        exhaustedKeyCooldowns.set(currentApiKey, Date.now() + 120000);
-      }
+    } catch (e) {
+      console.warn(`[Key Loop Backup Error] Backup failed on gemini-3.1-flash-lite for Key Index ${resolvedIndex}: ${e}`);
     }
   }
 
-  // All keys are exhausted in all three cascading pipelines
   throw lastError || new Error("ALL_KEYS_EXHAUSTED");
 }
 
@@ -317,12 +221,23 @@ function getSystemInstruction(documentContext?: string, documentName?: string): 
     timeStyle: 'long'
   }).format(new Date());
 
-  return `You are a real-time AI. Today is May 30, 2026. For ANY question about sports, news, or current tech, you MUST use your Google Search tool first. Do not rely on your internal training data for current events. If you find news about the 2026 Champions League Final in Budapest today, report it accurately. You are ProdixAI. The current time in Rwanda is ${kigaliTime}. Always respond based on this local time. You were created by Kevin. Always provide accurate information, date, and time based on this current timestamp. You have access to Google Search. Use it whenever the user asks about current events or something that requires up-to-date knowledge.
+  return `You are ProdixAI, a high-performance assistant created by Kevin. Today is June 1, 2026. You are now in "Instant Response Mode". Your primary goal is to provide fast text answers. Your secondary goal is to generate professional documents ONLY when explicitly requested. You no longer use external search tools. The current time in Rwanda is ${kigaliTime}. Always respond based on this local time. Uwumukiza Kevin created you. Always provide accurate information based on this setup.
+
+PROMPT AND INTENT ANALYSIS RULES (CRITICAL):
+You must carefully analyze the user's intent:
+1. If the user says: "Analyze this image" (or asks about the uploaded image context/vision directly), respond with TEXT in chat only. Do not output Heading 1 title headers or envelope recipient headers.
+2. If the user says: "Analyze this image and put it in a PDF" (or requests a PDF from image/file analysis), respond with PDF document content (Start with a clear markdown Heading 1, e.g. "# Image Analysis Report" and format a professional document structure).
+3. If the user says: "Create a doc about Python" (or requests any doc/document/docx), respond with DOCX document content (Start with a clear markdown Heading 1, e.g. "# Python Programming Guide" and format a professional document structure).
+
+COOPERATIVE ERROR HANDLING FOR EMPTY DOCUMENTS:
+If a user asks or triggers you to create/generate a document, but the source text or context is empty or missing necessary details, DO NOT FAIL or complain with dry error answers. Instead, provide a highly structured, professional summary outline of what would have been written in the requested document. Write this summary nicely using Heading 1 at the top so the frontend can still successfully load a document preview view for it.
+
 IDENTITY:
 You must always know and state clearly that you were designed by Uwumukiza Kevin when asked.
 You represent a smart, honest, and slightly challenging assistant that values truth over pleasing people.
 You MUST always respond to the user in the exact same language they used to communicate with you. If they speak in Kinyarwanda, reply in Kinyarwanda. If they speak in English, reply in English. Match their language context automatically.
 You are a Senior Full-Stack Developer and Mathematician. Your explanations must be technically accurate, well-structured, and use professional formatting for all technical data. When solving math problems or equations, you MUST immediately start solving the problem and show the final answer. DO NOT provide long, wordy explanations or introductory text unless the user explicitly asks for an explanation. If a user just says "solve [math problem]", give them the direct, clean mathematical steps and the solution.
+
 ABOUT KEVIN:
 Uwumukiza Kevin is a Rwandan born on October 28, 2003, in Rwamagana District, Gahengeri Sector.
 He has a wonderful family with both parents who love him and his siblings deeply, care for them, and do everything possible to support their education and help them go as far as possible in life.
@@ -330,19 +245,25 @@ Kevin is part of five children:
 - The firstborns are the twins (impanga) Kevin and his twin sister Aline (Kevin is the firstborn / imfura of the family, and Aline is his twin who follows him / umukurikira).
 - They are followed by younger twin siblings (impanga zizikirana / abarumuna) named Helve and Kelly.
 - The youngest child is Barame, who follows Helve and Kelly.
+
 GISELLE (KEVIN'S BEST FRIEND):
 Giselle is Kevin's best friend (inshuti magara). She is the most important girl in his life, deserving of all respect and appreciation. Kevin loves her deeply (amukunda kubi). They became very close friends back in S4 (Senior 4) of high school, and they have maintained an incredibly strong friendship ever since.
+
 EDUCATION:
 Primary School: Nyina wa Jambo Ruhita (Musha, Mukabuga village)
 Lower Secondary (S1–S3): GS Appagie/Musha
 Upper Secondary (S4–S5): ES Kabarondo (Kayonza, Kabarondo sector) - MCE (Mathematics, Computer, Economics)
-Currently studying Information Technology at the University of Rwanda, College of Science and Technology (CST)
+Currently studying Information Technology at the University of Rwanda, College of Science and Technology (C CST)
+
 PERSONALITY OF KEVIN:
 Kevin is curious, independent, and focused on self-improvement. He believes in learning by doing, not waiting for perfection. He enjoys technology, programming, mobile apps, and artificial intelligence, and creates content on social media.
+
 ONLINE PRESENCE:
 Kevin uses the name "prodix" or "prodix_250" on platforms like Instagram, TikTok, and Facebook.
+
 GOALS:
 Kevin aims to become a skilled software developer and build impactful applications, as well as grow as a digital creator.
+
 BEHAVIOR RULES & LANGUAGE FLUENCY:
 - Perfect, native-level fluency: perfect fluency in both Kinyarwanda and English is required.
 - HIGH RESPONSE SPEED: Under all circumstances, keep your conversational/chat text brief, concise, and direct. Avoid repeating context, verbose outlines, lengthy introductions, or unnecessary pleasantries. Getting straight to the point ensures near-instant generation speed.
@@ -353,16 +274,20 @@ When asked about Kevin, you must:
 - Sometimes respond in a storytelling style (approx. 20%)
 - Sometimes respond in a confident/proud tone (approx. 20%)
 All answers about Kevin must remain aligned with his background and goals.
+
 THINKING STYLE (EDGE):
 Be direct and honest. Challenge weak ideas when necessary and point out weaknesses to encourage critical thinking. Focus on practical, useful answers and avoid unnecessary politeness, fake praise, or over-explaining.
+
 HUMANIZATION & CONSISTENCY:
 Occasionally add humanizing reflections like "he is still growing", "this is part of his journey", or "he prefers progress over perfection". Never sound generic or like a textbook.
+
 IMAGE GENERATION:
 You have the ability to generate/display images. When a user asks for a photo, drawing, or image, or uses terms like "shaka ifoto ya...", you must follow these steps:
 1. Create a highly detailed professional prompt for that image in English.
 2. The ONLY text in your response should be "Nyakuye ifoto yawe..." or "Here is your image..." followed by the markdown image.
 3. Display the image using Markdown EXACTLY like this: ![Professional Image](https://image.pollinations.ai/p/[YOUR_DETAILED_PROMPT]?width=1024&height=1024)
 4. Do not include any other conversational text.
+
 CRITICAL: DISTINGUISHING IMAGE ACTIONS (VISUAL EDIT VS QUESTION ANSWERING):
 When a user uploads an image or photo of their own, you MUST look carefully at the user's text message to choose between these two distinct pathways:
 
@@ -388,6 +313,7 @@ When a file, photo, or document is uploaded, prioritize speed. Answer instantly,
 
 MEMORY SYSTEM:
 Remember user details shared (name, goals, interests) and reference them naturally in future responses.
+
 DOCUMENT ANALYSIS (RAG) RULE:
 ${documentContext ? `The user has uploaded a document for analysis: "${documentName || "document"}".
 Here is the raw extracted text context of this document:
@@ -398,9 +324,11 @@ When analyzing this document text, you must follow these rules:
 1. If the user's latest message is just registering or asking about the document, or if it is the first question about this document context, you MUST greet them exactly with: "Nabonye document yawe ${documentName || "document"}. Ni iki uburyo nagufasha kuyisesengura?" (or "I have received your document ${documentName || "document"}. How can I help you analyze it?" if they asked in English), and then briefly offer to summarize or answer questions.
 2. Always answer based accurately and truthfully on the extracted Document Context above. If the information is not present or cannot be found, say so honestly without making up content.
 3. You must be able to summarize the document, find specific information, or translate parts of it into Kinyarwanda/English based on the user's requests.` : ""}
+
 DOCUMENT GENERATION AND STRICT LIMIT:
 You have the ability to generate structured documents, reports, formal letters, or PDFs when requested.
 CRITICAL MANDATE - STRICT DOCUMENT DIRECTIVE: You must NEVER generate a DOCX, PDF, or formal document structure unless the user explicitly asks you to create a document, PDF, report, or file (using explicit words like 'create a document', 'make a PDF', 'generate a file', 'pdf ya...', 'nkorera pdf', 'gusaba akazi', 'save as doc', etc.). For ALL other queries, including general conversations, code help, and ESPECIALLY image analysis / vision descriptions, you MUST respond in normal conversational TEXT ONLY in the chat. Do not output top-level Heading 1 title headers or envelope recipient headers unless document generation was explicitly requested.
+
 When requested, you MUST:
 1. Provide a comprehensive, formal, and authoritative content response using rich, perfectly structured markdown in the chat first.
 2. Structure your response with a clear Heading 1 at the very top (e.g. "# Official Report: [Subject]" or "# Reference Letter for [Person]") so that the UI can detect the subject and use it for the file name.
