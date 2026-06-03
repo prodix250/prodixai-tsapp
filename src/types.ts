@@ -14,6 +14,7 @@ export interface ChatMessage {
   timestamp: Date;
   status?: "sent" | "delivered" | "read";
   attachment?: Attachment;
+  attachments?: Attachment[];
   fullDocText?: string;
   docTitle?: string;
   docType?: "letter" | "report" | "general";

@@ -5,7 +5,8 @@ export async function sendMessageToAI(
   message: string, 
   file?: Attachment, 
   documentContext?: string, 
-  documentName?: string
+  documentName?: string,
+  files?: Attachment[]
 ): Promise<{text: string, modelLabel?: string}> {
   try {
     // Detemine correct API URL depending on the runtime environment (APK, Web view, Render, Dev)
@@ -27,18 +28,27 @@ export async function sendMessageToAI(
     // The AI only needs the textual messages of the history, not the massive duplicate base64 data!
     const cleanedHistory = (history || []).map((msg: any) => {
       const actualText = msg.fullDocText || msg.text || "";
-      if (msg.attachment && msg.attachment.base64) {
-        const { base64, ...rest } = msg.attachment;
-        return {
-          ...msg,
-          text: actualText,
-          attachment: rest
-        };
-      }
-      return {
+      const cleanedMsg = {
         ...msg,
         text: actualText
       };
+
+      if (cleanedMsg.attachment && cleanedMsg.attachment.base64) {
+        const { base64, ...rest } = cleanedMsg.attachment;
+        cleanedMsg.attachment = rest;
+      }
+
+      if (cleanedMsg.attachments && Array.isArray(cleanedMsg.attachments)) {
+        cleanedMsg.attachments = cleanedMsg.attachments.map((att: any) => {
+          if (att && att.base64) {
+            const { base64, ...rest } = att;
+            return rest;
+          }
+          return att;
+        });
+      }
+
+      return cleanedMsg;
     });
 
     const response = await fetch(apiUrl, {
@@ -51,7 +61,8 @@ export async function sendMessageToAI(
         message,
         file,
         documentContext,
-        documentName
+        documentName,
+        files
       })
     });
 

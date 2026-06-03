@@ -120,12 +120,12 @@ async function getGeminiResponse(
       }
     });
 
-    // 1. Try gemini-2.5-flash for high standard limits (1500 RPD) and general smart performance
+    // 1. Try gemini-3.5-flash first as it has high standard quotas, modern architectures, and excellent performance
     try {
-      console.log(`[ProdixAI API] [Key Index ${resolvedIndex}] Trying gemini-2.5-flash (High-Speed Mode)...`);
+      console.log(`[ProdixAI API] [Key Index ${resolvedIndex}] Trying gemini-3.5-flash (Lightning Fast Mode)...`);
       
       const fetchPromise = ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-3.5-flash",
         contents,
         config: {
           systemInstruction: sysInstruction
@@ -133,22 +133,22 @@ async function getGeminiResponse(
       });
 
       const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("TIMEOUT_15S")), 15000)
+        setTimeout(() => reject(new Error("TIMEOUT_35S")), 35000)
       );
 
       const response = await Promise.race([fetchPromise, timeoutPromise]);
 
       if (response && response.text) {
-        console.log(`[ProdixAI Success] Successfully loaded response using gemini-2.5-flash (Key ID: ${resolvedIndex})`);
+        console.log(`[ProdixAI Success] Successfully loaded response using gemini-3.5-flash (Key ID: ${resolvedIndex})`);
         return {
           text: response.text,
-          modelLabel: "ProdixAI (gemini-2.5-flash - Lightning Fast Mode)"
+          modelLabel: "ProdixAI (gemini-3.5-flash - Lightning Fast Mode)"
         };
       }
     } catch (error: any) {
       lastError = error;
       const checkErrStr = (error.message || String(error)).toLowerCase();
-      console.warn(`[Key Loop Error] Failed on gemini-2.5-flash for Key Index ${resolvedIndex}: ${error.message || error}`);
+      console.warn(`[Key Loop Error] Failed on gemini-3.5-flash for Key Index ${resolvedIndex}: ${error.message || error}`);
       
       // If it is a safety or block issue, don't rotate (rotating keys won't change content filters). Throw it immediately.
       if (checkErrStr.includes("safety") || checkErrStr.includes("block") || checkErrStr.includes("candidate")) {
@@ -169,7 +169,7 @@ async function getGeminiResponse(
 
       // Try falling back to gemini-3.1-flash-lite on the same key resource first before rotating!
       try {
-        console.log(`[ProdixAI API Fallback] [Key Index ${resolvedIndex}] gemini-2.5-flash failed/limited. Trying gemini-3.1-flash-lite...`);
+        console.log(`[ProdixAI API Fallback] [Key Index ${resolvedIndex}] gemini-3.5-flash failed/limited. Trying gemini-3.1-flash-lite...`);
         const fetchPromiseLite = ai.models.generateContent({
           model: "gemini-3.1-flash-lite",
           contents,
@@ -179,7 +179,7 @@ async function getGeminiResponse(
         });
 
         const timeoutPromiseLite = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("TIMEOUT_15S")), 15000)
+          setTimeout(() => reject(new Error("TIMEOUT_25S")), 25000)
         );
 
         const responseLite = await Promise.race([fetchPromiseLite, timeoutPromiseLite]);
@@ -195,36 +195,36 @@ async function getGeminiResponse(
         console.warn(`[Key Loop Error] Fallback failed on gemini-3.1-flash-lite for Key Index ${resolvedIndex}: ${liteError.message || liteError}`);
       }
 
-      // Try falling back to gemini-3.5-flash as a last option on the same key resource before rotating!
+      // Try falling back to gemini-2.5-flash as a last option on the same key resource before rotating!
       try {
-        console.log(`[ProdixAI API Fallback] [Key Index ${resolvedIndex}] gemini-3.1-flash-lite failed/limited. Trying gemini-3.5-flash...`);
-        const fetchPromise35 = ai.models.generateContent({
-          model: "gemini-3.5-flash",
+        console.log(`[ProdixAI API Fallback] [Key Index ${resolvedIndex}] gemini-3.1-flash-lite failed/limited. Trying gemini-2.5-flash...`);
+        const fetchPromise25 = ai.models.generateContent({
+          model: "gemini-2.5-flash",
           contents,
           config: {
             systemInstruction: sysInstruction
           }
         });
 
-        const timeoutPromise35 = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("TIMEOUT_15S")), 15000)
+        const timeoutPromise25 = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("TIMEOUT_25S")), 25000)
         );
 
-        const response35 = await Promise.race([fetchPromise35, timeoutPromise35]);
+        const response25 = await Promise.race([fetchPromise25, timeoutPromise25]);
 
-        if (response35 && response35.text) {
-          console.log(`[ProdixAI Success] Successfully loaded response using gemini-3.5-flash (Key ID: ${resolvedIndex})`);
+        if (response25 && response25.text) {
+          console.log(`[ProdixAI Success] Successfully loaded response using gemini-2.5-flash (Key ID: ${resolvedIndex})`);
           return {
-            text: response35.text,
-            modelLabel: "ProdixAI (gemini-3.5-flash - Lightning Fast Fallback)"
+            text: response25.text,
+            modelLabel: "ProdixAI (gemini-2.5-flash - Lightning Fast Fallback)"
           };
         }
-      } catch (error35: any) {
-        console.warn(`[Key Loop Error] Fallback failed on gemini-3.5-flash for Key Index ${resolvedIndex}: ${error35.message || error35}`);
+      } catch (error25: any) {
+        console.warn(`[Key Loop Error] Fallback failed on gemini-2.5-flash for Key Index ${resolvedIndex}: ${error25.message || error25}`);
       }
 
-      if (error.message === "TIMEOUT_15S") {
-        console.warn(`[ProdixAI Key Pool] Key Index ${resolvedIndex} timed out (15s). Cooling down key for 5 minutes and rotating to next key immediately...`);
+      if (error.message === "TIMEOUT_35S") {
+        console.warn(`[ProdixAI Key Pool] Key Index ${resolvedIndex} timed out (35s). Cooling down key for 5 minutes and rotating to next key immediately...`);
         exhaustedKeyCooldowns.set(currentApiKey, Date.now() + 300000); // 5 mins cooldown
         continue; // Try the next key!
       }
@@ -236,8 +236,8 @@ async function getGeminiResponse(
     }
   }
 
-  // Desperate backup: If we cycled through all keys and still got nothing, we try gemini-2.5-flash first, and then gemini-3.1-flash-lite under backup mode
-  console.log(`[ProdixAI Key Pool] Desperate Backup - All key attempts failed. Trying backup loop with gemini-2.5-flash and gemini-3.1-flash-lite...`);
+  // Desperate backup: If we cycled through all keys and still got nothing, we try gemini-3.5-flash first, and then gemini-3.1-flash-lite under backup mode
+  console.log(`[ProdixAI Key Pool] Desperate Backup - All key attempts failed. Trying backup loop with gemini-3.5-flash and gemini-3.1-flash-lite...`);
   for (let i = 0; i < activeKeys.length; i++) {
     const currentApiKey = activeKeys[i];
     const keyIndexInRaw = currentApiKeys.indexOf(currentApiKey);
@@ -258,9 +258,9 @@ async function getGeminiResponse(
     });
 
     try {
-      console.log(`[ProdixAI API Backup] [Key Index ${resolvedIndex}] Trying backup gemini-2.5-flash...`);
+      console.log(`[ProdixAI API Backup] [Key Index ${resolvedIndex}] Trying backup gemini-3.5-flash...`);
       const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-3.5-flash",
         contents,
         config: {
           systemInstruction: sysInstruction
@@ -270,11 +270,11 @@ async function getGeminiResponse(
       if (response && response.text) {
         return {
           text: response.text,
-          modelLabel: "ProdixAI (gemini-2.5-flash - Backup Mode)"
+          modelLabel: "ProdixAI (gemini-3.5-flash - Backup Mode)"
         };
       }
     } catch (e) {
-      console.warn(`[Key Loop Backup Error] Backup failed on gemini-2.5-flash for Key Index ${resolvedIndex}: ${e}`);
+      console.warn(`[Key Loop Backup Error] Backup failed on gemini-3.5-flash for Key Index ${resolvedIndex}: ${e}`);
     }
 
     try {
@@ -375,7 +375,7 @@ You have the ability to generate/display images. When a user asks for a photo, d
 4. Do not include any other conversational text.
 
 CRITICAL: DISTINGUISHING IMAGE ACTIONS (VISUAL EDIT VS QUESTION ANSWERING):
-When a user uploads an image or photo of their own, you MUST look carefully at the user's text message to choose between these two distinct pathways:
+When a user uploads an image or photo of their own (or multiple images), you MUST look carefully at the user's text message to choose between these two distinct pathways:
 
 Pathway A - IMAGE EDITING, MODIFICATION, OR TRANSFORMATION (Only when user explicitly asks to visually modify/change/alter the physical image):
 - Criteria: The user wants to visually alter the image, change the background, draw something on it, add details (filters, hat, glasses), or re-draw/mutate the picture (e.g., "hindura iyi foto ube...", "change background", "add hat", "put a laptop in front of me", etc.).
@@ -386,16 +386,17 @@ Pathway A - IMAGE EDITING, MODIFICATION, OR TRANSFORMATION (Only when user expli
   4. Display the modified image below using pollinations markdown: ![Modified Image](https://image.pollinations.ai/p/[YOUR_DETAILED_PROMPT_WITH_EDITS]?width=1024&height=1024)
   5. Include absolutely NO other conversational text, lists of changes, or explanations.
 
-Pathway B - VISION, IMAGE ANALYSIS, STUDYING, AND QUESTION ANSWERING (When the user wants you to read, solve, explain, or answer questions on the uploaded image):
-- Criteria: The user asks about what is inside the photo, asks you to solve a math/physics/chemistry problem shown on the photo, read or translate writing/text in the photo, correct errors in the photo's assignment, explain the image, or simply asks "iki ni iki?" / "ibi ni ibiki?".
+Pathway B - VISION, IMAGE ANALYSIS, STUDYING, AND QUESTION ANSWERING (When the user wants you to read, solve, explain, or answer questions on the uploaded image or multiple images):
+- Criteria: The user asks about what is inside the photo(s), asks you to solve a math/physics/chemistry problem shown on them, read or translate writing/text in them, correct errors in their assignment, explain the images, or simply asks "iki ni iki?" / "ibi ni ibiki?".
 - Action:
-  1. Immediately analyze the photo using OCR or mathematical parsing to read and solve the questions or explain elements inside.
-  2. Directly reply with a high-accuracy, ultra-concise, beautifully-formatted text explanation or math steps in the user's language.
-  3. Keep the text brief and dense. Skip all wordy introductory sentences, friendly greetings, and repetitive filler. Proceed instantly to the solution.
-  4. DO NOT generate or display any pollinations.ai image markdown. Respond with direct text layout only.
+  1. Carefully analyze ALL the provided photos and images. Make sure to identify, study, and extract details from each and every single image uploaded. Do not ignore any of them.
+  2. If they contain questions or exercises, list and solve all of them beautifully and clearly in Kinyarwanda or English as specified.
+  3. Directly reply with a high-accuracy, ultra-concise, beautifully-formatted text explanation or math steps in the user's language.
+  4. Keep the text brief and dense. Skip all wordy introductory sentences, friendly greetings, and repetitive filler. Proceed instantly to the solutions.
+  5. DO NOT generate or display any pollinations.ai image markdown. Respond with direct text layout only.
 
-INSTANT IMAGE/FILE RESPONSE SPEED RULE:
-When a file, photo, or document is uploaded, prioritize speed. Answer instantly, omit unnecessary conversational chit-chat, and structure the reply with direct clarity.
+INSTANT MULTI-IMAGE/FILE RESPONSE SPEED RULE:
+When one or more files, photos, or documents are uploaded, prioritize speed. Answer instantly for all of them together, omit unnecessary conversational chit-chat, and structure the reply with direct clarity.
 
 MEMORY SYSTEM:
 Remember user details shared (name, goals, interests) and reference them naturally in future responses.
@@ -428,7 +429,7 @@ When requested, you MUST:
 
 app.post("/api/chat", async (req, res) => {
   try {
-    const { history, message, file, documentContext, documentName } = req.body;
+    const { history, message, file, documentContext, documentName, files } = req.body;
     const currentApiKeys = getApiKeys();
 
     // LATENCY OPTIMIZATION: Trim user history to the last 10 messages to keep the request small, fast, and light
@@ -442,7 +443,32 @@ app.post("/api/chat", async (req, res) => {
 
     // Build the parts for the new user message
     const newParts: Part[] = [];
-    if (file && file.base64 && file.type) {
+    const addedBase64s = new Set<string>();
+
+    // Support lists/arrays of multiple files (like images) sent in a single query
+    if (files && Array.isArray(files)) {
+      for (const curr of files) {
+        if (curr && curr.base64 && curr.type) {
+          const isNativelySupported = 
+            curr.type.startsWith("image/") || 
+            curr.type === "application/pdf" || 
+            curr.type === "text/plain";
+            
+          if (isNativelySupported && !addedBase64s.has(curr.base64)) {
+            newParts.push({
+              inlineData: {
+                data: curr.base64,
+                mimeType: curr.type
+              }
+            });
+            addedBase64s.add(curr.base64);
+          }
+        }
+      }
+    }
+
+    // Support single file parameter for legacy/backward-compatible APIs
+    if (file && file.base64 && file.type && !addedBase64s.has(file.base64)) {
       const isNativelySupported = 
         file.type.startsWith("image/") || 
         file.type === "application/pdf" || 
@@ -455,8 +481,10 @@ app.post("/api/chat", async (req, res) => {
             mimeType: file.type
           }
         });
+        addedBase64s.add(file.base64);
       }
     }
+
     newParts.push({ text: message || "" });
 
     contents.push({ role: "user", parts: newParts });

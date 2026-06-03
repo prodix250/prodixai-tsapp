@@ -12,8 +12,8 @@ import { Check, AlertCircle } from "lucide-react";
 
 export default function App() {
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
-    const saved = localStorage.getItem("prodixai-theme");
-    return saved === "dark";
+    const saved = localStorage.getItem("prodixai-theme-v2");
+    return saved !== "light";
   });
 
   const [sessions, setSessions] = useState<ChatSession[]>(() => {
@@ -100,7 +100,7 @@ export default function App() {
   }, [sessions]);
 
   useEffect(() => {
-    localStorage.setItem("prodixai-theme", isDarkMode ? "dark" : "light");
+    localStorage.setItem("prodixai-theme-v2", isDarkMode ? "dark" : "light");
     if (isDarkMode) {
       document.documentElement.classList.add('dark');
     } else {
@@ -183,6 +183,7 @@ export default function App() {
                    onBack={() => setActiveSession(null)} 
                    onUpdateSession={updateSession}
                    onNewChat={createNewChat}
+                   isDarkMode={isDarkMode}
                  />
                </div>
              ) : null}

@@ -97,3 +97,10 @@ body {
   background-color: var(--wa-header);
   transition: background-color 200ms ease;
 }
+
+/* Ensure all code blocks and code tags wrap automatically */
+pre, code {
+  white-space: pre-wrap !important;
+  word-break: break-all !important;
+}
+

@@ -126,18 +126,28 @@ function CodeBlock({ language, value }: { language: string; value: string }) {
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
-      <div className="p-0 text-sm overflow-x-auto custom-scrollbar">
+      <div className="p-0 text-[12.5px] overflow-x-auto custom-scrollbar w-full">
         <SyntaxHighlighter
           language={language}
           style={customCodeTheme}
+          wrapLines={true}
+          wrapLongLines={false}
           customStyle={{
             margin: 0,
-            padding: "1rem",
+            padding: "0.85rem 1rem",
             background: "transparent",
             fontFamily: "JetBrains Mono, Fira Code, monospace",
+            fontSize: "12.5px",
+            lineHeight: "1.6",
+            whiteSpace: "pre",
+            overflowX: "auto",
           }}
           codeTagProps={{
-            style: { fontFamily: "JetBrains Mono, Fira Code, monospace" }
+            style: { 
+              fontFamily: "JetBrains Mono, Fira Code, monospace",
+              fontSize: "12.5px",
+              whiteSpace: "pre",
+            }
           }}
         >
           {value}

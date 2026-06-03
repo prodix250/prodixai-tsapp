@@ -25,6 +25,8 @@ import {
 import { ChatSession } from "../types";
 import { format } from "date-fns";
 import { cn } from "../lib/utils";
+import { motion } from "motion/react";
+import defaultChatBg from "../../assets/chat-bg.jpg";
 
 interface ChatListProps {
   sessions: ChatSession[];
@@ -55,6 +57,17 @@ export function ChatList({
   const [editName, setEditName] = useState("");
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
+  const [sidebarWallpaper, setSidebarWallpaper] = useState<string | null>(() => {
+    return localStorage.getItem("prodixai-sidebar-bg");
+  });
+
+  useEffect(() => {
+    const updateWallpapers = () => {
+      setSidebarWallpaper(localStorage.getItem("prodixai-sidebar-bg"));
+    };
+    window.addEventListener("prodixai-wallpaper-change", updateWallpapers);
+    return () => window.removeEventListener("prodixai-wallpaper-change", updateWallpapers);
+  }, []);
   const [showClearAllConfirm, setShowClearAllConfirm] = useState(false);
 
   // States for immersive mock simulators
@@ -159,15 +172,48 @@ export function ChatList({
   );
 
   return (
-    <div className="flex flex-col h-full bg-wa-bg w-full max-w-3xl mx-auto sm:border-x sm:border-wa-divider shadow-2xl relative overflow-hidden">
+    <div className="flex flex-col h-full w-full max-w-3xl mx-auto sm:border-x sm:border-wa-divider shadow-2xl relative overflow-hidden transition-colors duration-200">
+      {/* Absolute Background Image Layer */}
+      <div 
+        className={cn(
+          "absolute inset-0 z-0 pointer-events-none transition-all duration-300",
+          isDarkMode ? "bg-[#111b21]" : "bg-white"
+        )}
+        style={{
+          backgroundImage: sidebarWallpaper 
+            ? `url(data:image/jpeg;base64,${sidebarWallpaper})` 
+            : `url(${defaultChatBg})`,
+          backgroundSize: "cover",
+          backgroundPosition: "center top",
+          backgroundRepeat: "no-repeat",
+          backgroundAttachment: "fixed",
+        }}
+      />
+      {/* Dark semi-transparent overlay to ensure maximum text contrast and legibility */}
+      <div 
+        className={cn(
+          "absolute inset-0 z-0 pointer-events-none transition-all duration-300",
+          isDarkMode ? "bg-black/50" : "bg-white/92"
+        )} 
+      />
+
       
       {/* App Bar / Header */}
-      <div className="header-anim px-4 pt-4 pb-3 flex items-center justify-between shadow-sm z-10 shrink-0">
+      <div className="header-anim px-4 pt-4 pb-3 flex items-center justify-between shadow-sm z-30 shrink-0">
         <div className="flex flex-col">
           <h1 className="text-white font-medium text-xl leading-tight">Prodix<span className="font-bold text-orange-500">AI</span></h1>
-          <span className="text-[12px] text-white/75 leading-none font-light">active</span>
+          <div className="flex items-center gap-1.5 mt-0.5 select-none">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            </span>
+            <span className="text-[12px] text-emerald-400 font-bold leading-none">online</span>
+          </div>
         </div>
         <div className="flex items-center text-white gap-4">
+          <span className="text-[10px] text-white/50 tracking-wide font-normal whitespace-nowrap select-none">
+            Designed by <span className="text-emerald-400 font-extrabold uppercase">GIZZO</span>
+          </span>
           <button onClick={toggleTheme} className="p-1 hover:bg-white/20 rounded-full transition-colors cursor-pointer" title="Shift theme">
             {isDarkMode ? <Sun className="w-5 h-5 text-yellow-300" /> : <Moon className="w-5 h-5" />}
           </button>
@@ -208,7 +254,7 @@ export function ChatList({
       </div>
 
       {/* RENDER VIEW BASED ON ACTIVE TAB */}
-      <div className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
+      <div className="flex-1 flex flex-col min-h-0 overflow-hidden relative z-10">
         
         {/* TAB 1: CHATS VIEW */}
         {activeTab === "chats" && (
@@ -239,15 +285,18 @@ export function ChatList({
                     <div className="text-[#00a884] text-3xl font-bold tracking-tighter">PX<span className="text-orange-500 font-extrabold">AI</span></div>
                   </div>
                   <h2 className="text-2xl font-medium text-wa-text mb-3">Prodix AI Assistant</h2>
-                  <p className="text-[15px] leading-relaxed max-w-md mx-auto">
-                    Start a new chat or select an existing one to begin. I am ready to assist you and analyze your documents!
+                  <p className="text-[15px] leading-relaxed max-w-sm mx-auto text-wa-text-muted">
+                    I'm ProdixAI, click the "Start Ask prodixAI" button to ask anything. Prodix is ready to help you with all questions.
+                  </p>
+                  <p className="text-[12px] mt-4 font-medium tracking-wide text-wa-text-muted/65 uppercase">
+                    Designed by <strong className="text-[#00a884] font-extrabold">GIZZO</strong>
                   </p>
                 </div>
               ) : (
                 filteredSessions.map((session) => (
                   <div 
                     key={session.id} 
-                    className="group flex items-center px-3 py-3 hover:bg-wa-panel cursor-pointer transition-colors border-b border-wa-divider/30"
+                    className="group flex items-center px-3 py-3 hover:bg-wa-panel cursor-pointer transition-colors"
                     onClick={() => {
                       if (editingId !== session.id) {
                         onSelectChat(session);
@@ -701,13 +750,21 @@ export function ChatList({
 
       {/* Floating Action Button (FAB) on Chat List */}
       {activeTab === "chats" && (
-        <button 
+        <motion.button 
           onClick={onNewChat}
-          className="absolute right-5 bottom-[84px] w-[52px] h-[52px] bg-[#00a884] hover:bg-[#019373] active:scale-95 text-white rounded-full flex items-center justify-center shadow-lg border border-white/5 z-30 transition-all duration-150 cursor-pointer hover:scale-105"
-          title="New Chat"
+          initial={{ opacity: 0, scale: 0.9, y: 10 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          whileHover={{ scale: 1.05, backgroundColor: "#019373" }}
+          whileTap={{ scale: 0.95 }}
+          transition={{ type: "spring", stiffness: 450, damping: 25 }}
+          className="absolute right-5 bottom-[84px] h-[46px] px-4 bg-[#00a884] text-white rounded-full flex items-center justify-center gap-2 shadow-lg shadow-[#00a884]/20 hover:shadow-xl hover:shadow-[#00a884]/30 border border-white/10 z-30 cursor-pointer"
+          title="Start Ask prodixAI"
         >
-          <MessageSquare className="w-5 h-5 text-white fill-current shrink-0" />
-        </button>
+          <MessageSquare className="w-4.5 h-4.5 text-white fill-current shrink-0" />
+          <span className="text-[13px] font-extrabold tracking-tight select-none text-white whitespace-nowrap">
+            Start Ask prodixAI
+          </span>
+        </motion.button>
       )}
 
       {/* IMMERSIVE VIDEO & VOICE CALL SIMULATOR MODAL */}

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { ArrowLeft, MoreVertical, Phone, Video, Paperclip, Send, Camera as CameraIcon, Mic, Check, CheckCheck, Bot, X, Plus, Download, Trash2, FileText, Copy } from "lucide-react";
+import { ArrowLeft, MoreVertical, Phone, Video, Paperclip, Send, Camera as CameraIcon, Mic, Check, CheckCheck, Bot, X, Plus, Download, Trash2, FileText, Copy, Image as ImageIcon, RefreshCw } from "lucide-react";
 import { ChatMessage, Attachment, ChatSession } from "../types";
 import { cn, fileToBase64, compressImageBase64 } from "../lib/utils";
 import { generateProfessionalDoc, generateProfessionalPdf } from "../lib/documentGenerator";
@@ -8,6 +8,7 @@ import { AttachmentMenu } from "./AttachmentMenu";
 import { sendMessageToAI } from "../api";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { motion, AnimatePresence } from "motion/react";
+import defaultChatBg from "../../assets/chat-bg.jpg";
 
 // Helper to sanitize & extract extremely concise and humanized document names to prevent word-wrapping/overflows and download issues on mobile
 function cleanAndShortenDocTitle(rawTitle: string): string {
@@ -66,14 +67,75 @@ function ChatImage({ src, alt, name }: { src?: string; alt: string; name: string
   );
 }
 
+interface AttachmentPreviewItemProps {
+  file: File;
+  onRemove: () => void;
+  isParsingDoc?: boolean;
+}
+
+function AttachmentPreviewItem({ file, onRemove, isParsingDoc }: AttachmentPreviewItemProps) {
+  const [previewUrl, setPreviewUrl] = useState<string>("");
+  const isImage = file.type.startsWith("image/");
+
+  useEffect(() => {
+    let url = "";
+    if (isImage) {
+      url = URL.createObjectURL(file);
+      setPreviewUrl(url);
+    }
+    return () => {
+      if (url) {
+        URL.revokeObjectURL(url);
+      }
+    };
+  }, [file, isImage]);
+
+  return (
+    <div className="relative flex items-center bg-zinc-100 dark:bg-zinc-800 border border-wa-divider rounded-lg p-2 pr-8 shadow-sm max-w-[200px] shrink-0 select-none animate-in fade-in zoom-in-95 duration-200">
+      {isImage && previewUrl ? (
+        <img 
+          src={previewUrl} 
+          alt={file.name} 
+          className="w-10 h-10 object-cover rounded border border-wa-divider mr-2 bg-zinc-200 dark:bg-zinc-700" 
+        />
+      ) : (
+        <div className="w-10 h-10 rounded bg-[#00a884]/10 flex items-center justify-center mr-2 shrink-0 border border-wa-divider">
+          <FileText className="w-5 h-5 text-[#00a884]" />
+        </div>
+      )}
+      
+      <div className="flex-1 min-w-0 text-left">
+        <p className="text-xs font-semibold text-wa-text truncate max-w-[110px] leading-tight mb-0.5" title={file.name}>
+          {file.name}
+        </p>
+        <span className="text-[9px] text-wa-text-muted font-mono leading-none">
+          {isImage ? "Image" : isParsingDoc ? "Parsing..." : "Document"}
+        </span>
+      </div>
+      
+      <button 
+        onClick={(e) => {
+          e.preventDefault();
+          onRemove();
+        }}
+        className="absolute top-1 right-1 p-0.5 text-wa-text-muted hover:text-red-500 hover:bg-red-500/10 rounded-full transition-colors cursor-pointer"
+        title="Remove item"
+      >
+        <X className="w-3.5 h-3.5" />
+      </button>
+    </div>
+  );
+}
+
 interface ChatInterfaceProps {
   session: ChatSession;
   onBack: () => void;
   onUpdateSession: (id: string, updates: Partial<ChatSession>) => void;
   onNewChat: () => void;
+  isDarkMode: boolean;
 }
 
-export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: ChatInterfaceProps) {
+export function ChatInterface({ session, onBack, onUpdateSession, onNewChat, isDarkMode }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     if (session.isTemporary) {
       return [{
@@ -96,10 +158,23 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
               url: `data:${attachment.type};base64,${attachment.base64}`
             };
           }
+          let attachments = m.attachments;
+          if (attachments && Array.isArray(attachments)) {
+            attachments = attachments.map((att: any) => {
+              if (att && att.base64 && (!att.url || att.url.startsWith("blob:"))) {
+                return {
+                  ...att,
+                  url: `data:${att.type};base64,${att.base64}`
+                };
+              }
+              return att;
+            });
+          }
           return {
             ...m,
             timestamp: !isNaN(date.getTime()) ? date : new Date(),
-            attachment
+            attachment,
+            attachments
           };
         });
       } catch (e) {}
@@ -114,13 +189,88 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
 
   const [inputText, setInputText] = useState("");
   const [isAttachmentOpen, setIsAttachmentOpen] = useState(false);
-  const [attachedFile, setAttachedFile] = useState<File | null>(null);
+  const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const attachedFile = attachedFiles.length > 0 ? attachedFiles[attachedFiles.length - 1] : null;
   const [isLoading, setIsLoading] = useState(false);
   const [customLoadingText, setCustomLoadingText] = useState<string | null>(null);
   const [activeModelLabel, setActiveModelLabel] = useState<string>("Prodix-Pro");
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [chatWallpaper, setChatWallpaper] = useState<string | null>(() => {
+    return localStorage.getItem("prodixai-chat-bg");
+  });
+
+  useEffect(() => {
+    const updateWallpapers = () => {
+      setChatWallpaper(localStorage.getItem("prodixai-chat-bg"));
+    };
+    window.addEventListener("prodixai-wallpaper-change", updateWallpapers);
+    return () => window.removeEventListener("prodixai-wallpaper-change", updateWallpapers);
+  }, []);
+
+  const handleWallpaperUpload = async (file: File, target: "chat" | "sidebar") => {
+    try {
+      const compressed = await compressImageBase64(file, 800, 800, 0.75);
+      localStorage.setItem(`prodixai-${target}-bg`, compressed);
+      window.dispatchEvent(new Event("prodixai-wallpaper-change"));
+      
+      window.dispatchEvent(new CustomEvent("prodixai-download", {
+        detail: {
+          success: true,
+          message: `Background ya ${target === "chat" ? "Chat" : "History"} yahinduwe neza!`
+        }
+      }));
+    } catch (err: any) {
+      console.error("Failed to upload wallpaper:", err);
+      window.dispatchEvent(new CustomEvent("prodixai-download", {
+        detail: {
+          success: false,
+          message: `Guhindura Background byanze: ${err.message}`
+        }
+      }));
+    }
+  };
+
+  const handleResetWallpapers = () => {
+    localStorage.removeItem("prodixai-chat-bg");
+    localStorage.removeItem("prodixai-sidebar-bg");
+    window.dispatchEvent(new Event("prodixai-wallpaper-change"));
+    window.dispatchEvent(new CustomEvent("prodixai-download", {
+      detail: {
+        success: true,
+        message: "Backgrounds zose zasubijwe uko zari zimeze neza!"
+      }
+    }));
+    setIsMenuOpen(false);
+  };
   const [isDownloadingDoc, setIsDownloadingDoc] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  
+  // Typewriter simulated streaming states
+  const [typingMessageId, setTypingMessageId] = useState<string | null>(null);
+  const typingIntervalRef = useRef<any>(null);
+  const currentTypingRef = useRef<{ id: string; fullText: string; words: string[]; index: number } | null>(null);
+
+  // Instant finish/flush typewriter
+  const flushCurrentTyping = () => {
+    if (typingIntervalRef.current && currentTypingRef.current) {
+      clearInterval(typingIntervalRef.current);
+      const { id, fullText } = currentTypingRef.current;
+      setMessages(prev => prev.map(m => m.id === id ? { ...m, text: fullText } : m));
+      setTypingMessageId(null);
+      typingIntervalRef.current = null;
+      currentTypingRef.current = null;
+    }
+  };
+
+  // Clean up typing animations and effects on session change
+  useEffect(() => {
+    if (typingIntervalRef.current) {
+      clearInterval(typingIntervalRef.current);
+      typingIntervalRef.current = null;
+    }
+    currentTypingRef.current = null;
+    setTypingMessageId(null);
+  }, [session.id]);
   
   // Document Parsing and RAG states
   const [isParsingDoc, setIsParsingDoc] = useState(false);
@@ -128,7 +278,7 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
   const [extractedDocName, setExtractedDocName] = useState(session.documentName || "");
 
   const handleFileSelect = async (file: File) => {
-    setAttachedFile(file);
+    setAttachedFiles(prev => [...prev, file]);
     const extension = file.name.split('.').pop()?.toLowerCase();
     
     if (["pdf", "docx", "doc", "pptx", "ppt", "txt"].includes(extension || "")) {
@@ -155,7 +305,29 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
       } finally {
         setIsParsingDoc(false);
       }
+    }
+  };
+
+  const removeAttachment = (indexToRemove?: number) => {
+    if (typeof indexToRemove === "number") {
+      setAttachedFiles(prev => {
+        const updated = prev.filter((_, idx) => idx !== indexToRemove);
+        const docsRemaining = updated.filter(f => {
+          const ext = f.name.split('.').pop()?.toLowerCase() || "";
+          return ["pdf", "docx", "doc", "pptx", "ppt", "txt"].includes(ext);
+        });
+        if (docsRemaining.length === 0) {
+          setExtractedDocText("");
+          setExtractedDocName("");
+          onUpdateSession(session.id, {
+            documentContext: undefined,
+            documentName: undefined
+          });
+        }
+        return updated;
+      });
     } else {
+      setAttachedFiles([]);
       setExtractedDocText("");
       setExtractedDocName("");
       onUpdateSession(session.id, {
@@ -163,16 +335,6 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
         documentName: undefined
       });
     }
-  };
-
-  const removeAttachment = () => {
-    setAttachedFile(null);
-    setExtractedDocText("");
-    setExtractedDocName("");
-    onUpdateSession(session.id, {
-      documentContext: undefined,
-      documentName: undefined
-    });
   };
 
   // Main helper for document generation UI & data splitting as requested
@@ -458,10 +620,17 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
   };
   
   const endOfMessagesRef = useRef<HTMLDivElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
   const lastSessionIdRef = useRef(session.id);
   const isInitialMountRef = useRef(true);
 
   const handleClearChat = () => {
+    if (typingIntervalRef.current) {
+      clearInterval(typingIntervalRef.current);
+      typingIntervalRef.current = null;
+    }
+    currentTypingRef.current = null;
+    setTypingMessageId(null);
     setMessages([]);
     onUpdateSession(session.id, {
       lastMessage: "",
@@ -471,14 +640,14 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
   };
 
   useEffect(() => {
-    if (!session.isTemporary) {
+    if (!session.isTemporary && !typingMessageId) {
       try {
         localStorage.setItem(`prodixai-messages-${session.id}`, JSON.stringify(messages));
       } catch (err) {
         console.error("Failed to save messages to localStorage:", err);
       }
     }
-  }, [messages, session.id, session.isTemporary]);
+  }, [messages, session.id, session.isTemporary, typingMessageId]);
 
   useEffect(() => {
     // 1. If we switch sessions, scroll all the way down instantly
@@ -503,35 +672,46 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
     }
   }, [messages, session.id]);
 
-  const handleSend = async () => {
-    if (!inputText.trim() && !attachedFile) return;
+   const handleSend = async (e?: React.FormEvent | React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+    }
 
-    const navFile = attachedFile;
+    // Flush any ongoing typewriter animation instantly to make the UI snappy if double clicking/rapid messaging
+    flushCurrentTyping();
+
+    if (!inputText.trim() && attachedFiles.length === 0) return;
+
     const currentText = inputText.trim();
 
-    let newAttachment: Attachment | undefined = undefined;
-    if (navFile) {
+    // Process all attached files
+    let newAttachments: Attachment[] = [];
+    if (attachedFiles.length > 0) {
       try {
-        let base64 = "";
-        let finalUrl = "";
-        if (navFile.type.startsWith("image/")) {
-          base64 = await compressImageBase64(navFile, 600, 600, 0.75);
-          finalUrl = `data:${navFile.type};base64,${base64}`;
-        } else {
-          base64 = await fileToBase64(navFile);
-          finalUrl = URL.createObjectURL(navFile);
-        }
-
-        newAttachment = {
-          name: navFile.name,
-          type: navFile.type,
-          base64: base64,
-          url: finalUrl
-        };
-      } catch (e) {
-        console.error("Failed to read file", e);
+        newAttachments = await Promise.all(attachedFiles.map(async (file) => {
+          let base64 = "";
+          let finalUrl = "";
+          if (file.type.startsWith("image/")) {
+            // Compress with a max width of 1024px to reduce size and prevent memory reloads
+            base64 = await compressImageBase64(file, 1024, 1024, 0.8);
+            finalUrl = `data:${file.type};base64,${base64}`;
+          } else {
+            base64 = await fileToBase64(file);
+            finalUrl = URL.createObjectURL(file);
+          }
+          return {
+            name: file.name,
+            type: file.type,
+            base64: base64,
+            url: finalUrl
+          };
+        }));
+      } catch (err) {
+        console.error("Failed to read files", err);
       }
     }
+
+    const newAttachment = newAttachments.length > 0 ? newAttachments[0] : undefined;
 
     const newMessage: ChatMessage = {
       id: Date.now().toString(),
@@ -539,7 +719,8 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
       text: currentText,
       timestamp: new Date(),
       status: "sent",
-      attachment: newAttachment
+      attachment: newAttachment,
+      attachments: newAttachments
     };
 
     setMessages(prev => [...prev, newMessage]);
@@ -548,7 +729,7 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
       lastMessageTime: newMessage.timestamp
     });
     setInputText("");
-    setAttachedFile(null);
+    setAttachedFiles([]);
 
     // Distinguish if the request is for visual image editing/transformation OR vision/answering questions
     const hasVisualEditIntent = /hindura|change|edit|modify|transform|put|add|replace|background|remove|filter|hat|wear|glasses|shirt|hair|style/i.test(currentText);
@@ -580,7 +761,8 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
         currentText, 
         newAttachment, 
         extractedDocText, 
-        extractedDocName
+        extractedDocName,
+        newAttachments
       );
       if (modelLabel) {
         setActiveModelLabel(modelLabel);
@@ -590,21 +772,61 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
       setMessages(prev => prev.map(m => m.id === newMessage.id ? { ...m, status: "read" } : m));
 
       const docGen = handleDocumentGeneration(responseText, currentText);
+      const finalText = docGen ? docGen.chatResponse : responseText;
 
+      const aiMessageId = (Date.now() + 1).toString();
       const aiMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
+        id: aiMessageId,
         role: "model",
-        text: docGen ? docGen.chatResponse : responseText,
+        text: "", // start empty and reveal using word-by-word streaming typewriter!
         fullDocText: docGen ? docGen.documentBlob : undefined,
         docTitle: docGen ? docGen.docTitle : undefined,
         docType: docGen ? docGen.docType : undefined,
         timestamp: new Date()
       };
+
       setMessages(prev => [...prev, aiMessage]);
+      setTypingMessageId(aiMessageId);
+
+      // Split final text into word and spacing chunks to preserve formatting perfectly
+      const words = finalText.split(/(\s+)/);
+      let streamedText = "";
+      let currentWordIndex = 0;
+
+      currentTypingRef.current = {
+        id: aiMessageId,
+        fullText: finalText,
+        words,
+        index: 0
+      };
+
+      // Set high-level session status preview right away for polished sidebar navigation
       onUpdateSession(session.id, {
-        lastMessage: docGen ? docGen.chatResponse : responseText,
+        lastMessage: finalText,
         lastMessageTime: aiMessage.timestamp
       });
+
+      typingIntervalRef.current = setInterval(() => {
+        if (currentWordIndex < words.length) {
+          streamedText += words[currentWordIndex];
+          currentWordIndex++;
+          if (currentTypingRef.current) {
+            currentTypingRef.current.index = currentWordIndex;
+          }
+          setMessages(prev => 
+            prev.map(m => m.id === aiMessageId ? { ...m, text: streamedText } : m)
+          );
+          
+          // Do not scroll down automatically while the AI is typing; let the view stay where it is so the user can read the beginning of the reply.
+        } else {
+          if (typingIntervalRef.current) {
+            clearInterval(typingIntervalRef.current);
+            typingIntervalRef.current = null;
+          }
+          currentTypingRef.current = null;
+          setTypingMessageId(null);
+        }
+      }, 15); // extremely snappy 15ms simulated streaming chunks
 
     } catch (error: any) {
        const errorMessage: ChatMessage = {
@@ -621,9 +843,34 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
   };
 
   return (
-    <div className="flex flex-col h-full wa-doodle-bg w-full max-w-3xl mx-auto sm:border-x sm:border-wa-divider shadow-2xl relative overflow-hidden">
+    <div className="flex flex-col h-full w-full max-w-3xl mx-auto sm:border-x sm:border-wa-divider shadow-2xl relative overflow-hidden">
+      {/* Absolute Background Image Layer */}
+      <div 
+        className={cn(
+          "absolute inset-0 z-0 pointer-events-none transition-all duration-300",
+          isDarkMode ? "bg-[#111b21]" : "bg-[#ffffff]",
+          !chatWallpaper && "wa-doodle-bg"
+        )}
+        style={{
+          backgroundImage: chatWallpaper 
+            ? `url(data:image/jpeg;base64,${chatWallpaper})` 
+            : `url(${defaultChatBg})`,
+          backgroundSize: "cover",
+          backgroundPosition: "center top",
+          backgroundRepeat: "no-repeat",
+          backgroundAttachment: "fixed",
+        }}
+      />
+      {/* Semi-transparent overlay to ensure maximum text contrast and legibility */}
+      <div 
+        className={cn(
+          "absolute inset-0 z-0 pointer-events-none transition-all duration-300",
+          isDarkMode ? "bg-black/50" : "bg-white/85"
+        )} 
+      />
+
       {/* Header */}
-      <div className="flex items-center justify-between header-anim text-white px-2 py-2 sm:py-3 z-10 shadow-sm shrink-0">
+      <div className="flex items-center justify-between header-anim text-white px-2 py-2 sm:py-3 z-30 shadow-sm shrink-0">
         <div className="flex items-center gap-1 sm:gap-2">
           <button onClick={onBack} className="p-2 -mr-1 rounded-full hover:bg-white/20 transition-colors">
             <ArrowLeft className="w-6 h-6" />
@@ -659,7 +906,13 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
                     </span>
                   </span>
                 ) : (
-                  <span className="text-white/80">online</span>
+                  <span className="flex items-center gap-1.5 text-emerald-400 font-bold select-none">
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                    </span>
+                    online
+                  </span>
                 )}
               </span>
             </div>
@@ -667,6 +920,9 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
         </div>
         
         <div className="flex items-center gap-1 sm:gap-2">
+          <span className="text-[10px] text-white/50 tracking-wide font-normal whitespace-nowrap select-none mr-1.5 hidden min-[360px]:inline">
+            Designed by <span className="text-emerald-400 font-extrabold uppercase">GIZZO</span>
+          </span>
           <button 
             onClick={onNewChat}
             className="p-3 rounded-full hover:bg-white/20 transition-colors cursor-pointer text-white block outline-none animate-scale-in"
@@ -697,20 +953,46 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
                     className="fixed inset-0 z-40" 
                     onClick={() => setIsMenuOpen(false)} 
                   />
-                  <motion.div 
-                    initial={{ opacity: 0, scale: 0.95, y: -10 }}
-                    animate={{ opacity: 1, scale: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.95, y: -10 }}
-                    transition={{ duration: 0.15, ease: "easeOut" }}
-                    className="absolute right-2 top-full mt-1 w-56 bg-wa-panel text-wa-text rounded-lg shadow-[0_4px_12px_rgba(0,0,0,0.2)] border border-wa-divider z-50 py-1 origin-top-right whitespace-nowrap"
-                  >
-                    <button
-                      onClick={handleClearChat}
-                      className="w-full text-left px-4 py-3 text-sm font-medium hover:bg-wa-divider transition-colors flex items-center gap-2 cursor-pointer text-red-500 hover:text-red-600 border-none bg-transparent"
+                    <motion.div 
+                      initial={{ opacity: 0, scale: 0.95, y: -10 }}
+                      animate={{ opacity: 1, scale: 1, y: 0 }}
+                      exit={{ opacity: 0, scale: 0.95, y: -10 }}
+                      transition={{ duration: 0.15, ease: "easeOut" }}
+                      className="absolute right-2 top-full mt-1 w-56 bg-wa-panel text-wa-text rounded-lg shadow-[0_4px_12px_rgba(0,0,0,0.2)] border border-wa-divider z-50 py-1 origin-top-right whitespace-nowrap"
                     >
-                      Clear Chat
-                    </button>
-                  </motion.div>
+                      <label
+                        htmlFor="chatWallpaperInput"
+                        className="w-full text-left px-4 py-3 text-sm font-medium hover:bg-wa-divider transition-colors flex items-center gap-2 cursor-pointer text-wa-text border-none bg-transparent"
+                        onClick={() => setIsMenuOpen(false)}
+                      >
+                        <ImageIcon className="w-4 h-4 text-[#00a884]" /> Background ya Chat
+                      </label>
+                      <label
+                        htmlFor="sidebarWallpaperInput"
+                        className="w-full text-left px-4 py-3 text-sm font-medium hover:bg-wa-divider transition-colors flex items-center gap-2 cursor-pointer text-wa-text border-none bg-transparent"
+                        onClick={() => setIsMenuOpen(false)}
+                      >
+                        <ImageIcon className="w-4 h-4 text-[#00a884]" /> Background ya History
+                      </label>
+                      
+                      {(chatWallpaper || localStorage.getItem("prodixai-sidebar-bg")) && (
+                        <button
+                          onClick={handleResetWallpapers}
+                          className="w-full text-left px-4 py-3 text-sm font-medium hover:bg-wa-divider transition-colors flex items-center gap-2 cursor-pointer text-amber-500 hover:text-amber-600 border-none bg-transparent"
+                        >
+                          <RefreshCw className="w-4 h-4" /> Reset Wallpapers
+                        </button>
+                      )}
+
+                      <div className="border-t border-wa-divider/50 my-1"></div>
+
+                      <button
+                        onClick={handleClearChat}
+                        className="w-full text-left px-4 py-3 text-sm font-medium hover:bg-wa-divider transition-colors flex items-center gap-2 cursor-pointer text-red-500 hover:text-red-600 border-none bg-transparent"
+                      >
+                        <Trash2 className="w-4 h-4" /> Clear Chat
+                      </button>
+                    </motion.div>
                 </>
               )}
             </AnimatePresence>
@@ -719,7 +1001,7 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
       </div>
 
       {/* Chat Area */}
-      <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-2 bg-transparent relative">
+      <div ref={chatContainerRef} className="flex-1 overflow-y-auto p-4 flex flex-col gap-2 bg-transparent relative z-10">
         <div className="flex justify-center mb-4 z-10">
           <div className="bg-wa-panel text-wa-text-muted text-xs px-3 py-1.5 rounded-lg shadow-sm">
             Ukora gake bikajyenda cyane by <span className="text-[#00a884] font-bold">Kevin</span>
@@ -741,70 +1023,151 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
             <div key={msg.id} className={cn("flex", msg.role === "user" ? "justify-end" : "justify-start")}>
               <div 
                 className={cn(
-                  "relative max-w-[85%] sm:max-w-[75%] rounded-lg px-2 pt-2 pb-1 text-[15px] shadow-sm flex flex-col gap-1",
-                  msg.role === "user" ? "bg-wa-bubble-out rounded-tr-none text-wa-text" : "bg-wa-bubble-in rounded-tl-none text-wa-text"
+                  "relative rounded-lg px-3 pt-2 pb-1 text-[15px] shadow-sm flex flex-col gap-1",
+                  msg.role === "user" 
+                    ? "max-w-[85%] sm:max-w-[75%] bg-wa-bubble-out rounded-tr-none text-wa-text" 
+                    : "max-w-[94%] sm:max-w-[88%] md:max-w-[85%] bg-wa-bubble-in rounded-tl-none text-wa-text w-full"
                 )}
               >
-                {/* Attachment Preview */}
-                {msg.attachment && (
-                  <div className="mb-1 rounded overflow-hidden max-w-xs min-w-[240px]">
-                    {msg.attachment.type.startsWith("image/") ? (
-                       <ChatImage src={msg.attachment.url} alt="attachment" name={msg.attachment.name} />
-                    ) : (
-                       <div className="flex items-center justify-between gap-3 p-2.5 bg-black/10 dark:bg-black/20 hover:bg-black/15 rounded-[8px] transition-colors cursor-pointer border border-white/5">
-                         <div className="flex items-center gap-2.5 overflow-hidden">
-                           {/* Rich colored file icon indicator */}
-                           {(() => {
-                             const nameLower = msg.attachment.name.toLowerCase();
-                             const isPdf = nameLower.endsWith(".pdf");
-                             const isDocx = nameLower.endsWith(".docx") || nameLower.endsWith(".doc");
-                             const isPptx = nameLower.endsWith(".pptx") || nameLower.endsWith(".ppt");
-                             
-                             let iconColor = "bg-red-500 text-white"; // PDF
-                             let extLabel = "PDF";
-                             if (isDocx) {
-                               iconColor = "bg-blue-600 text-white";
-                               extLabel = "DOCX";
-                             } else if (isPptx) {
-                               iconColor = "bg-orange-500 text-white";
-                               extLabel = "PPTX";
-                             } else {
-                               iconColor = "bg-teal-600 text-white";
-                               extLabel = "DOC";
-                             }
-                             
-                             return (
-                               <div className={cn("w-10 h-10 rounded-lg flex flex-col justify-center items-center shadow-md shrink-0 text-[10px] font-extrabold uppercase select-none tracking-wider", iconColor)}>
-                                 <FileText className="w-5 h-5 mb-0.5 shrink-0" />
-                                 {extLabel}
-                               </div>
-                             );
-                           })()}
-                           <div className="flex flex-col overflow-hidden text-left">
-                             <span className="text-[13px] font-semibold text-wa-text truncate max-w-[150px] leading-tight font-sans" title={msg.attachment.name}>
-                               {msg.attachment.name}
-                             </span>
-                             <span className="text-[10px] text-wa-text-muted mt-0.5 font-mono">
-                               {msg.attachment.base64 ? `${Math.round(msg.attachment.base64.length * 0.75 / 1024)} KB` : "Document"} • File
-                             </span>
-                           </div>
-                         </div>
-                         
-                         {/* Download button */}
-                         <a 
-                           href={msg.attachment.url || "#"} 
-                           download={msg.attachment.name}
-                           onClick={(e) => {
-                             if (!msg.attachment.url) e.preventDefault();
-                           }}
-                           className="w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center transition-colors text-wa-text-muted cursor-pointer shrink-0"
-                           title="Download document"
-                         >
-                           <Download className="w-4 h-4" />
-                         </a>
-                       </div>
-                    )}
+                 {/* Attachment Preview */}
+                {msg.attachments && msg.attachments.length > 0 ? (
+                  <div className="mb-1 rounded overflow-hidden max-w-xs min-w-[240px] flex flex-col gap-1.5">
+                    {(() => {
+                      const imgAttachments = msg.attachments.filter(a => a.type.startsWith("image/"));
+                      const docAttachments = msg.attachments.filter(a => !a.type.startsWith("image/"));
+                      
+                      return (
+                        <>
+                          {imgAttachments.length > 0 && (
+                            <div className={cn(
+                              "grid gap-1",
+                              imgAttachments.length === 1 ? "grid-cols-1" :
+                              imgAttachments.length === 2 ? "grid-cols-2" : "grid-cols-3"
+                            )}>
+                              {imgAttachments.map((att, attIdx) => (
+                                <div key={attIdx} className="overflow-hidden rounded-md border border-white/5 bg-zinc-200 dark:bg-zinc-800">
+                                  <ChatImage src={att.url} alt={`attachment-${attIdx}`} name={att.name} />
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          
+                          {docAttachments.map((att, attIdx) => (
+                            <div key={attIdx} className="flex items-center justify-between gap-3 p-2.5 bg-black/10 dark:bg-black/20 hover:bg-black/15 rounded-[8px] transition-colors cursor-pointer border border-white/5">
+                              <div className="flex items-center gap-2.5 overflow-hidden">
+                                {(() => {
+                                  const nameLower = att.name.toLowerCase();
+                                  const isPdf = nameLower.endsWith(".pdf");
+                                  const isDocx = nameLower.endsWith(".docx") || nameLower.endsWith(".doc");
+                                  const isPptx = nameLower.endsWith(".pptx") || nameLower.endsWith(".ppt");
+                                  
+                                  let iconColor = "bg-red-500 text-white";
+                                  let extLabel = "PDF";
+                                  if (isDocx) {
+                                    iconColor = "bg-blue-600 text-white";
+                                    extLabel = "DOCX";
+                                  } else if (isPptx) {
+                                    iconColor = "bg-orange-500 text-white";
+                                    extLabel = "PPTX";
+                                  } else {
+                                    iconColor = "bg-teal-600 text-white";
+                                    extLabel = "DOC";
+                                  }
+                                  
+                                  return (
+                                    <div className={cn("w-10 h-10 rounded-lg flex flex-col justify-center items-center shadow-md shrink-0 text-[10px] font-extrabold uppercase select-none tracking-wider", iconColor)}>
+                                      <FileText className="w-5 h-5 mb-0.5 shrink-0" />
+                                      {extLabel}
+                                    </div>
+                                  );
+                                })()}
+                                <div className="flex flex-col overflow-hidden text-left">
+                                  <span className="text-[13px] font-semibold text-wa-text truncate max-w-[150px] leading-tight font-sans" title={att.name}>
+                                    {att.name}
+                                  </span>
+                                  <span className="text-[10px] text-wa-text-muted mt-0.5 font-mono">
+                                    {att.base64 ? `${Math.round(att.base64.length * 0.75 / 1024)} KB` : "Document"} • File
+                                  </span>
+                                </div>
+                              </div>
+                              <a 
+                                href={att.url || "#"} 
+                                download={att.name}
+                                onClick={(e) => {
+                                  if (!att.url) e.preventDefault();
+                                }}
+                                className="w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center transition-colors text-wa-text-muted cursor-pointer shrink-0"
+                                title="Download document"
+                              >
+                                <Download className="w-4 h-4" />
+                              </a>
+                            </div>
+                          ))}
+                        </>
+                      );
+                    })()}
                   </div>
+                ) : (
+                  msg.attachment && (
+                    <div className="mb-1 rounded overflow-hidden max-w-xs min-w-[240px]">
+                      {msg.attachment.type.startsWith("image/") ? (
+                         <ChatImage src={msg.attachment.url} alt="attachment" name={msg.attachment.name} />
+                      ) : (
+                         <div className="flex items-center justify-between gap-3 p-2.5 bg-black/10 dark:bg-black/20 hover:bg-black/15 rounded-[8px] transition-colors cursor-pointer border border-white/5">
+                           <div className="flex items-center gap-2.5 overflow-hidden">
+                             {/* Rich colored file icon indicator */}
+                             {(() => {
+                               const nameLower = msg.attachment.name.toLowerCase();
+                               const isPdf = nameLower.endsWith(".pdf");
+                               const isDocx = nameLower.endsWith(".docx") || nameLower.endsWith(".doc");
+                               const isPptx = nameLower.endsWith(".pptx") || nameLower.endsWith(".ppt");
+                               
+                               let iconColor = "bg-red-500 text-white"; // PDF
+                               let extLabel = "PDF";
+                               if (isDocx) {
+                                 iconColor = "bg-blue-600 text-white";
+                                 extLabel = "DOCX";
+                               } else if (isPptx) {
+                                 iconColor = "bg-orange-500 text-white";
+                                 extLabel = "PPTX";
+                               } else {
+                                 iconColor = "bg-teal-600 text-white";
+                                 extLabel = "DOC";
+                               }
+                               
+                               return (
+                                 <div className={cn("w-10 h-10 rounded-lg flex flex-col justify-center items-center shadow-md shrink-0 text-[10px] font-extrabold uppercase select-none tracking-wider", iconColor)}>
+                                   <FileText className="w-5 h-5 mb-0.5 shrink-0" />
+                                   {extLabel}
+                                 </div>
+                               );
+                             })()}
+                             <div className="flex flex-col overflow-hidden text-left">
+                               <span className="text-[13px] font-semibold text-wa-text truncate max-w-[150px] leading-tight font-sans" title={msg.attachment.name}>
+                                 {msg.attachment.name}
+                               </span>
+                               <span className="text-[10px] text-wa-text-muted mt-0.5 font-mono">
+                                 {msg.attachment.base64 ? `${Math.round(msg.attachment.base64.length * 0.75 / 1024)} KB` : "Document"} • File
+                               </span>
+                             </div>
+                           </div>
+                           
+                           {/* Download button */}
+                           <a 
+                             href={msg.attachment.url || "#"} 
+                             download={msg.attachment.name}
+                             onClick={(e) => {
+                               if (!msg.attachment.url) e.preventDefault();
+                             }}
+                             className="w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center transition-colors text-wa-text-muted cursor-pointer shrink-0"
+                             title="Download document"
+                           >
+                             <Download className="w-4 h-4" />
+                           </a>
+                         </div>
+                      )}
+                    </div>
+                  )
                 )}
                 
                 <div className="flex flex-col gap-1 w-full pt-1">
@@ -951,7 +1314,7 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
       </div>
 
        {/* Input Area */}
-      <div className="bg-transparent border-t border-wa-divider/30 px-2 pt-2.5 pb-2 flex flex-col z-20 shrink-0 relative">
+      <div className="bg-wa-panel/90 backdrop-blur-md border-t border-wa-divider/30 px-2 pt-2.5 pb-2 flex flex-col z-20 shrink-0 relative">
         {/* We moved the attachment menu down here to wrap it properly for relative positioning (bottom-full) */}
         <AttachmentMenu 
           isOpen={isAttachmentOpen} 
@@ -980,11 +1343,12 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
           type="file" 
           id="galleryInput"
           accept="image/*" 
+          multiple
           className="absolute w-[1px] h-[1px] opacity-0 pointer-events-none"
           onChange={(e) => { 
-            const file = e.target.files?.[0];
-            if (file) {
-              handleFileSelect(file);
+            const files = e.target.files;
+            if (files && files.length > 0) {
+              Array.from(files).forEach(file => handleFileSelect(file));
               e.target.value = "";
             }
             setIsAttachmentOpen(false); 
@@ -994,36 +1358,56 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
           type="file" 
           id="fileInput"
           accept=".pdf,.docx,.doc,.pptx,.ppt,.txt"
+          multiple
           className="absolute w-[1px] h-[1px] opacity-0 pointer-events-none"
           onChange={(e) => { 
-            const file = e.target.files?.[0];
-            if (file) {
-              handleFileSelect(file);
+            const files = e.target.files;
+            if (files && files.length > 0) {
+              Array.from(files).forEach(file => handleFileSelect(file));
               e.target.value = "";
             }
             setIsAttachmentOpen(false); 
           }} 
         />
+        <input 
+          type="file" 
+          id="chatWallpaperInput"
+          accept="image/*" 
+          className="absolute w-[1px] h-[1px] opacity-0 pointer-events-none"
+          onChange={(e) => { 
+            const file = e.target.files?.[0]; 
+            if (file) {
+              handleWallpaperUpload(file, "chat");
+              e.target.value = ""; 
+            }
+          }} 
+        />
+        <input 
+          type="file" 
+          id="sidebarWallpaperInput"
+          accept="image/*" 
+          className="absolute w-[1px] h-[1px] opacity-0 pointer-events-none"
+          onChange={(e) => { 
+            const file = e.target.files?.[0]; 
+            if (file) {
+              handleWallpaperUpload(file, "sidebar");
+              e.target.value = ""; 
+            }
+          }} 
+        />
 
-        {attachedFile && (
-          <div className="mx-2 mb-2 bg-wa-panel p-2.5 rounded-lg shadow-md flex items-center gap-2 border border-wa-divider transition-all duration-300 animate-in fade-in slide-in-from-bottom-2">
-            <Paperclip className="w-4 h-4 text-[#00a884] animate-pulse shrink-0" />
-            <div className="flex-1 min-w-0 text-left">
-              <span className="text-sm text-wa-text truncate block font-semibold">{attachedFile.name}</span>
-              {isParsingDoc ? (
-                <span className="text-[10px] text-orange-400 font-medium flex items-center gap-1">
-                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-orange-400 animate-ping"></span>
-                  Parsing document...
-                </span>
-              ) : (
-                <span className="text-[10px] text-green-500 font-medium">
-                  {extractedDocText ? "✓ Ready to analyze" : "✓ Document attached"}
-                </span>
-              )}
+        {attachedFiles.length > 0 && (
+          <div className="mx-2 mb-2 bg-wa-panel p-2 rounded-lg shadow-md border border-wa-divider transition-all duration-300 animate-in fade-in slide-in-from-bottom-2">
+            <div className="flex items-center gap-2 overflow-x-auto pb-1 max-h-24 scrollbar-thin">
+              {attachedFiles.map((file, idx) => (
+                <AttachmentPreviewItem 
+                  key={idx} 
+                  file={file} 
+                  onRemove={() => removeAttachment(idx)} 
+                  isParsingDoc={isParsingDoc && idx === attachedFiles.length - 1}
+                />
+              ))}
             </div>
-            <button onClick={removeAttachment} className="p-1 text-red-500 hover:bg-red-500/10 rounded-full shrink-0 transition-colors cursor-pointer">
-               <X className="w-4 h-4" />
-            </button>
           </div>
         )}
 
@@ -1051,7 +1435,7 @@ export function ChatInterface({ session, onBack, onUpdateSession, onNewChat }: C
                onKeyDown={(e) => {
                  if (e.key === 'Enter' && !e.shiftKey) {
                    e.preventDefault();
-                   handleSend();
+                   handleSend(e);
                  }
                }}
              />
