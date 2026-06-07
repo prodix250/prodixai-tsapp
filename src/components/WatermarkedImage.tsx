@@ -2,6 +2,19 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import { Download, Loader2, RotateCcw, AlertCircle } from "lucide-react";
 import { downloadFile } from "../lib/capacitorDownload";
 
+function safeDecodeURIComponent(str: string): string {
+  try {
+    return decodeURIComponent(str);
+  } catch (e) {
+    try {
+      // Decode with unencoded % symbols handled safely
+      return decodeURIComponent(str.replace(/%(?![0-9a-fA-F]{2})/g, "%25"));
+    } catch (e2) {
+      return str.replace(/%/g, " percent");
+    }
+  }
+}
+
 function getPromptFromUrl(url: string): string {
   if (!url) return "";
   try {
@@ -13,39 +26,84 @@ function getPromptFromUrl(url: string): string {
       promptStart = url.indexOf("/p/") + "/p/".length;
     }
     
-    if (promptStart === -1) {
-      const lastSlashText = url.lastIndexOf("/");
-      if (lastSlashText !== -1 && lastSlashText < url.length - 1) {
-        promptStart = lastSlashText + 1;
+    let extracted = "";
+    if (promptStart !== -1) {
+      const questionMarkIndex = url.indexOf("?", promptStart);
+      if (questionMarkIndex !== -1) {
+        extracted = url.substring(promptStart, questionMarkIndex);
       } else {
-        return url;
+        extracted = url.substring(promptStart);
+      }
+    } else {
+      const lastSlashText = url.lastIndexOf("/");
+      if (lastSlashText !== -1 && lastSlashText > 8) { // past https://
+        const questionMarkIndex = url.indexOf("?", lastSlashText);
+        if (questionMarkIndex !== -1) {
+          extracted = url.substring(lastSlashText + 1, questionMarkIndex);
+        } else {
+          extracted = url.substring(lastSlashText + 1);
+        }
       }
     }
     
-    const questionMarkIndex = url.indexOf("?", promptStart);
-    let promptStr = "";
-    if (questionMarkIndex !== -1) {
-      promptStr = url.substring(promptStart, questionMarkIndex);
-    } else {
-      promptStr = url.substring(promptStart);
+    if (!extracted) {
+      return "Professional Image";
     }
     
-    return decodeURIComponent(promptStr).trim();
+    let decoded = safeDecodeURIComponent(extracted).trim();
+    // Strip surrounding and nested bracket symbols that are often output by AI models literal schema imitation
+    decoded = decoded.replace(/[\[\]]/g, "").trim();
+    return decoded || "Professional Image";
   } catch (e) {
     console.error("Error getting prompt from URL", e);
-    return url;
+    return "Professional Image";
   }
 }
 
 function sanitizePrompt(prompt: string): string {
   if (!prompt) return "Professional Image";
-  return prompt
+  
+  // Safely remove any bracket markers like [ or ]
+  let cleaned = prompt
     .trim()
-    // Remove characters that specifically break URL parsing or Pollinations query format,
-    // like ?, #, &, =, %, /, \, +, *, ^, @, etc.
-    .replace(/[?#&=\\\/%+*^@|<>:;`"]/g, "")
-    // replace multiple spaces with a single space
+    .replace(/[\[\]]/g, "")
+    .replace(/[?#&=\\\/%+*^@|<>:;`"]/g, " ")
     .replace(/\s+/g, " ");
+  
+  // Truncate prompt length safely (max 180 chars) to prevent 414 Request-URI Too Large / CDN issues
+  if (cleaned.length > 180) {
+    const truncated = cleaned.substring(0, 180);
+    const lastSpace = truncated.lastIndexOf(" ");
+    if (lastSpace > 40) {
+      cleaned = truncated.substring(0, lastSpace).trim();
+    } else {
+      cleaned = truncated.trim();
+    }
+  }
+  return cleaned.trim() || "Professional Image";
+}
+
+function getProxyUrl(url: string): string {
+  if (!url) return "";
+  if (!url.includes("pollinations.ai") && !url.includes("image.pollinations.ai")) {
+    return url;
+  }
+  
+  let baseApi = "/api/proxy-image";
+  if (typeof window !== "undefined" && window.location) {
+    const { protocol } = window.location;
+    const isWebProtocol = protocol.startsWith("http");
+    
+    if (!isWebProtocol) {
+      // Fallback for Android APK webviews running on file:// or custom local schemas
+      baseApi = "https://prodixai-tsapp.onrender.com/api/proxy-image";
+    } else {
+      // Standard browser previews or web deployments route directly to our local proxy
+      baseApi = "/api/proxy-image";
+    }
+  }
+
+  return `${baseApi}?url=${encodeURIComponent(url)}`;
 }
 
 // Local storage cache for successfully loaded image URLs to prevent infinite reloading or flashing
@@ -68,14 +126,13 @@ function setSavedLoadedStatus(url: string, isLoaded: boolean) {
 }
 
 export function WatermarkedImage({ url }: { url: string }) {
-  const [retryCount, setRetryCount] = useState<number>(() => {
-    try {
-      const saved = localStorage.getItem(`prodixai-img-retry-${encodeURIComponent(url)}`);
-      return saved ? parseInt(saved, 10) : 0;
-    } catch (e) {
-      return 0;
-    }
-  });
+  const isPollinations = useMemo(() => url.includes("pollinations.ai") || url.includes("image.pollinations.ai"), [url]);
+  const [retryCount, setRetryCount] = useState<number>(0);
+  const [autoRetryAttempt, setAutoRetryAttempt] = useState<number>(0);
+  const [useProxy, setUseProxy] = useState<boolean>(isPollinations);
+
+  // NOTE: For Android, ensure 'android:usesCleartextTraffic="true"' is set in your AndroidManifest.xml
+  // if you are loading images over HTTP or from domains that might be treated as unencrypted.
 
   // Calculate stable deterministic seed
   const stableSeed = useMemo(() => {
@@ -100,42 +157,53 @@ export function WatermarkedImage({ url }: { url: string }) {
     return Math.abs(hash) % 1000000;
   }, [url]);
 
-  // Generate a stable URL using sanitization and correct pollination format
-  const cleanUrl = useMemo(() => {
+  // Improved URL generation with retry logic
+  const activeUrl = useMemo(() => {
     if (!url || (!url.includes("image.pollinations.ai") && !url.includes("pollinations.ai"))) return url;
+    
     const rawPrompt = getPromptFromUrl(url);
-    const cleanPrompt = sanitizePrompt(rawPrompt);
+    const cleanPrompt = sanitizePrompt(rawPrompt) || "Image";
     const encodedPrompt = encodeURIComponent(cleanPrompt);
     
-    const seed = stableSeed + retryCount;
-    return `https://image.pollinations.ai/p/${encodedPrompt}?width=1024&height=1024&seed=${seed}&nologo=true`;
-  }, [url, retryCount, stableSeed]);
+    return `/api/generate-image?prompt=${encodedPrompt}&cb=${autoRetryAttempt}`;
+  }, [url, autoRetryAttempt]);
 
   const [status, setStatus] = useState<"loading" | "success" | "error">(() => {
-    return getSavedLoadedStatus(cleanUrl) ? "success" : "loading";
+    return getSavedLoadedStatus(activeUrl) ? "success" : "loading";
   });
 
   const [isDownloading, setIsDownloading] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);
 
+  // Reset counters when URL changes
   useEffect(() => {
-    if (getSavedLoadedStatus(cleanUrl)) {
+    setAutoRetryAttempt(0);
+    setRetryCount(0);
+    setUseProxy(isPollinations);
+    setStatus("loading");
+  }, [url, isPollinations]);
+
+  // Update status when activeUrl changes
+  useEffect(() => {
+    if (getSavedLoadedStatus(activeUrl)) {
       setStatus("success");
     } else {
       setStatus("loading");
     }
-  }, [cleanUrl]);
+  }, [activeUrl]);
 
   const handleRetry = () => {
     setStatus("loading");
-    setSavedLoadedStatus(cleanUrl, false); // clear cache status for the current url as precaution
-    setRetryCount((prev) => {
-      const next = prev + 1;
-      try {
-        localStorage.setItem(`prodixai-img-retry-${encodeURIComponent(url)}`, next.toString());
-      } catch (e) {}
-      return next;
-    });
+    setSavedLoadedStatus(activeUrl, false); 
+    setAutoRetryAttempt(0); 
+    setUseProxy(isPollinations);
+    setRetryCount((prev) => prev + 1); 
+  };
+
+  // ... (rest of the functions remain the same)
+  
+  const triggerFallbackDownload = () => {
+    downloadFile(activeUrl, `ProdixAI-${Date.now()}.jpg`);
   };
 
   // Handle high quality watermark render on download via canvas dynamically
@@ -147,15 +215,15 @@ export function WatermarkedImage({ url }: { url: string }) {
       const img = new Image();
       img.crossOrigin = "anonymous";
       img.referrerPolicy = "no-referrer";
-      img.src = cleanUrl;
+      img.src = activeUrl;
 
       img.onload = async () => {
         try {
           const canvas = document.createElement("canvas");
           const ctx = canvas.getContext("2d");
           
-          const width = img.naturalWidth || img.width || 1024;
-          const height = img.naturalHeight || img.height || 1024;
+          const width = img.naturalWidth || img.width || 768;
+          const height = img.naturalHeight || img.height || 768;
           canvas.width = width;
           canvas.height = height;
 
@@ -218,16 +286,12 @@ export function WatermarkedImage({ url }: { url: string }) {
     }
   };
 
-  const triggerFallbackDownload = () => {
-    downloadFile(cleanUrl, `ProdixAI-${Date.now()}.jpg`);
-  };
-
   if (status === "error") {
     return (
       <div className="w-full py-5 px-4 bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 text-sm font-sans flex flex-col items-center justify-center rounded-lg mt-2 gap-3 text-center">
         <div className="flex items-center gap-2">
           <AlertCircle className="w-5 h-5 flex-shrink-0" />
-          <span>Failed to load image due to network issue. (Ifoto yanze kuza kubera interineti cyangwa ko urubuga ruhuze.)</span>
+          <span>Failed to load image. (Ifoto yanze kuza.)</span>
         </div>
         <button
           onClick={handleRetry}
@@ -247,30 +311,26 @@ export function WatermarkedImage({ url }: { url: string }) {
           <div className="text-wa-text-muted text-2xl font-bold tracking-tighter mb-2 animate-bounce">
             PX<span className="text-orange-500 font-extrabold">AI</span>
           </div>
-          <span className="text-sm text-wa-text-muted animate-pulse font-sans">Generating your image... (Ndirimo gutunganya ifoto yawe, akanya gato...)</span>
+          <span className="text-sm text-wa-text-muted animate-pulse font-sans">Generating... (Itubanya...)</span>
         </div>
       )}
       
       <img 
+        key={autoRetryAttempt}
         ref={imgRef}
-        src={cleanUrl} 
+        src={activeUrl} 
         alt="Generated UI" 
         referrerPolicy="no-referrer"
         onLoad={() => {
           setStatus("success");
-          setSavedLoadedStatus(cleanUrl, true);
+          setSavedLoadedStatus(activeUrl, true);
         }}
         onError={() => {
-          if (retryCount < 3) {
-            console.warn(`Pollinations image loading failed in image tag. Retrying #${retryCount + 1}...`);
-            setRetryCount((prev) => {
-              const next = prev + 1;
-              try {
-                localStorage.setItem(`prodixai-img-retry-${encodeURIComponent(url)}`, next.toString());
-              } catch (e) {}
-              return next;
-            });
+          if (autoRetryAttempt < 4) {
+            console.warn(`Image request failed. Retry attempt #${autoRetryAttempt + 1} ...`);
+            setAutoRetryAttempt((prev) => prev + 1);
           } else {
+            console.error(`All image pipelines and retries completed with failure.`);
             setStatus("error");
           }
         }}
@@ -279,7 +339,6 @@ export function WatermarkedImage({ url }: { url: string }) {
 
       {status === "success" && (
         <>
-          {/* Watermark Applied via CSS Overlay on UI - immediately visible */}
           <div className="absolute bottom-3 right-3 flex items-center gap-0.5 font-sans pointer-events-none select-none drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] bg-black/30 px-2 py-0.5 rounded-md backdrop-blur-xs">
             <span className="text-white text-[15px] sm:text-[18px] font-bold tracking-tight">Prodix</span>
             <span className="text-[#f97316] text-[15px] sm:text-[18px] font-extrabold tracking-tight">AI</span>
