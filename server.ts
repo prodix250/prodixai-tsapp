@@ -974,7 +974,7 @@ interface GeminiResponseResult {
 // Local in-memory caches to record sub-system and structural limits on a per-key basis.
 // Keeps performance ultra-fast and prevents server from hammering exhausted limits.
 const searchGroundingCooldowns = new Map<string, number>();
-const exhaustedKeyCooldowns = new Map<string, number>();
+
 
 // Robust API call wrapper that automatically rotates through available API keys upon hitting 429/quota limits
 async function getGeminiResponse(
